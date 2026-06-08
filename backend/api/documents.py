@@ -1,14 +1,18 @@
 """文档管理 API 路由"""
 
+import os
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from backend.data_loader.chunker import get_chunker
+from backend.data_loader.loader import DocumentLoader
 from backend.data_loader.manager import get_document_manager
-from backend.data_loader.pdf_processor import extract_pdf_text
+from backend.data_loader.pdf_processor import extract_pdf_text, process_pdf_file
+from backend.retrieval import get_vector_store
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -259,3 +263,209 @@ async def get_document_content(document_id: str):
     except Exception as e:
         logger.error(f"获取文档内容失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 以下端点从 document.py 合并 ──
+
+
+class DocumentProcessResponse(BaseModel):
+    """文档处理响应（不上传到向量库）"""
+
+    status: str
+    file_name: str
+    text_length: int
+    tables_count: int
+    images_count: int
+    chunks: List[str]
+    metadata: Dict[str, Any]
+
+
+class BatchUploadResponse(BaseModel):
+    """批量上传响应"""
+
+    status: str
+    success_count: int
+    error_count: int
+    results: List[Dict[str, Any]]
+    errors: List[Dict[str, Any]]
+
+
+class SupportedFormatsResponse(BaseModel):
+    """支持的格式响应"""
+
+    formats: List[Dict[str, Any]]
+
+
+@router.post("/process", response_model=DocumentProcessResponse)
+async def process_document_only(
+    file: UploadFile = File(...),
+    use_ocr: bool = True,
+    extract_tables: bool = True,
+    extract_images: bool = False,
+    chunk_size: int = 512,
+    chunk_overlap: int = 100,
+):
+    """处理文档（返回分块结果，不上传到向量库）
+
+    Args:
+        file: 上传的 PDF 文件
+        use_ocr: 是否启用 OCR
+        extract_tables: 是否提取表格
+        extract_images: 是否提取图片
+        chunk_size: 分块大小
+        chunk_overlap: 分块重叠大小
+    """
+    try:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="文件名不能为空")
+
+        file_ext = Path(file.filename).suffix.lower()
+
+        if file_ext != ".pdf":
+            raise HTTPException(status_code=400, detail="目前仅支持 PDF 文件的处理")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_file_path = tmp_file.name
+
+        try:
+            result = process_pdf_file(
+                file_path=tmp_file_path,
+                use_ocr=use_ocr,
+                extract_tables=extract_tables,
+                extract_images=extract_images,
+            )
+
+            chunker = get_chunker(file.filename, chunk_size, chunk_overlap)
+            chunks = chunker.split_text(result["text"])
+            chunks = [c for c in chunks if c.strip()]
+
+            return DocumentProcessResponse(
+                status="success",
+                file_name=file.filename,
+                text_length=len(result["text"]),
+                tables_count=len(result.get("tables", [])),
+                images_count=len(result.get("images", [])),
+                chunks=chunks,
+                metadata=result.get("metadata", {}),
+            )
+
+        finally:
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"文档处理失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
+
+
+@router.post("/batch/upload", response_model=BatchUploadResponse)
+async def batch_upload_documents(
+    files: List[UploadFile] = File(...),
+    use_ocr: bool = True,
+    chunk_size: int = 512,
+    chunk_overlap: int = 100,
+):
+    """批量上传文档到向量库
+
+    Args:
+        files: 批量上传的文件列表
+        use_ocr: 是否启用 OCR
+        chunk_size: 分块大小
+        chunk_overlap: 分块重叠大小
+    """
+    results: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for file in files:
+        try:
+            if not file.filename:
+                errors.append({"file": "unknown", "error": "文件名为空"})
+                continue
+
+            file_ext = Path(file.filename).suffix.lower()
+
+            if file_ext not in [".pdf", ".txt", ".md", ".json", ".csv"]:
+                errors.append({"file": file.filename, "error": f"不支持的格式: {file_ext}"})
+                continue
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+                content = await file.read()
+                tmp_file.write(content)
+                tmp_file_path = tmp_file.name
+
+            try:
+                loader = DocumentLoader()
+                documents: list[str] = []
+
+                if file_ext == ".pdf":
+                    result = process_pdf_file(
+                        file_path=tmp_file_path,
+                        use_ocr=use_ocr,
+                        extract_tables=True,
+                        extract_images=False,
+                    )
+                    documents.append(result["text"])
+                else:
+                    documents = loader.load_from_file(tmp_file_path)
+
+                if documents:
+                    chunker = get_chunker(file.filename, chunk_size, chunk_overlap)
+                    all_chunks: list[str] = []
+                    for doc in documents:
+                        if doc.strip():
+                            chunks = chunker.split_text(doc)
+                            all_chunks.extend(chunks)
+
+                    vector_store = get_vector_store()
+                    chunk_texts = [c for c in all_chunks if c.strip()]
+                    metadatas = [
+                        {
+                            "source": file.filename,
+                            "chunk_index": i,
+                            "total_chunks": len(chunk_texts),
+                        }
+                        for i in range(len(chunk_texts))
+                    ]
+
+                    doc_ids = vector_store.add_documents(chunk_texts, metadatas=metadatas)
+
+                    results.append(
+                        {
+                            "file": file.filename,
+                            "status": "success",
+                            "chunks": len(doc_ids),
+                        }
+                    )
+
+            finally:
+                if os.path.exists(tmp_file_path):
+                    os.unlink(tmp_file_path)
+
+        except Exception as e:
+            errors.append({"file": file.filename, "error": str(e)})
+
+    return BatchUploadResponse(
+        status="completed",
+        success_count=len(results),
+        error_count=len(errors),
+        results=results,
+        errors=errors,
+    )
+
+
+@router.get("/supported-formats", response_model=SupportedFormatsResponse)
+async def get_supported_formats():
+    """获取支持的文档格式"""
+    return SupportedFormatsResponse(
+        formats=[
+            {"extension": ".pdf", "name": "PDF 文档", "ocr": True, "table_extraction": True},
+            {"extension": ".txt", "name": "文本文件", "ocr": False, "table_extraction": False},
+            {"extension": ".md", "name": "Markdown", "ocr": False, "table_extraction": False},
+            {"extension": ".json", "name": "JSON", "ocr": False, "table_extraction": False},
+            {"extension": ".csv", "name": "CSV 表格", "ocr": False, "table_extraction": True},
+        ]
+    )

@@ -20,7 +20,6 @@ from backend.api import (
     chart_router,
     chat_router,
     cicd_router,
-    document_router,
     documents_router,
     knowledge_graph_router,
     link_parser_router,
@@ -130,8 +129,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=Fals
 openapi_tags = [
     {"name": "认证", "description": "用户认证相关接口，包括登录、注册、令牌管理"},
     {"name": "聊天", "description": "文档问答聊天接口，支持 RAG 检索增强"},
-    {"name": "文档管理", "description": "文档上传、管理、检索相关接口"},
-    {"name": "文档处理", "description": "文档处理、解析、分块相关接口"},
+    {"name": "文档管理", "description": "文档上传、管理、检索、处理相关接口"},
     {"name": "多模态问答", "description": "支持图片理解的多模态问答接口"},
     {"name": "工作流", "description": "工作流定义、执行、管理接口"},
     {"name": "Agent", "description": "智能代理相关接口"},
@@ -308,7 +306,6 @@ app.include_router(workflow_router)
 app.include_router(cicd_router)
 # 新增路由注册
 app.include_router(audit_router)
-app.include_router(document_router)
 app.include_router(multimodal_router)
 app.include_router(notification_router)
 app.include_router(unified_chat_router)

@@ -7,7 +7,6 @@ from backend.api.auth import router as auth_router
 from backend.api.chart import router as chart_router
 from backend.api.chat import router as chat_router
 from backend.api.cicd import router as cicd_router
-from backend.api.document import router as document_router
 from backend.api.documents import router as documents_router
 from backend.api.knowledge_graph import router as knowledge_graph_router
 from backend.api.link_parser import router as link_parser_router
@@ -34,7 +33,6 @@ __all__ = [
     "agent_router",
     "summary_router",
     "audit_router",
-    "document_router",
     "multimodal_router",
     "unified_chat_router",
     "notification_router",
