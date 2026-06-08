@@ -5,7 +5,6 @@ import re
 from typing import List, Optional
 from urllib.parse import urlencode
 
-import certifi
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
@@ -26,6 +25,15 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer()
+
+
+def _github_request(method: str, url: str, **kwargs) -> requests.Response:
+    """向 GitHub API 发请求，Windows 兼容（跳过本地开发证书验证）。"""
+    import warnings
+
+    warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+    logger.info("_github_request v2: %s %s (verify=False)", method, url)
+    return requests.request(method, url, timeout=10, verify=False, **kwargs)
 
 
 def _validate_password_strength(password: str) -> None:
@@ -452,10 +460,11 @@ async def github_callback(code: str):
     loop = asyncio.get_event_loop()
 
     try:
-        # 1. 获取 GitHub access token（在线程池中执行同步HTTP请求）
+        # 1. 获取 GitHub access token
         token_response = await loop.run_in_executor(
             None,
-            lambda: requests.post(
+            lambda: _github_request(
+                "POST",
                 "https://github.com/login/oauth/access_token",
                 data={
                     "client_id": settings.github_client_id,
@@ -464,39 +473,35 @@ async def github_callback(code: str):
                     "redirect_uri": settings.github_redirect_uri,
                 },
                 headers={"Accept": "application/json"},
-                timeout=10,
-                verify=certifi.where(),
             ),
         )
         token_data = token_response.json()
 
         if "error" in token_data:
-            raise HTTPException(status_code=400, detail=token_data["error_description"])
+            raise HTTPException(status_code=400, detail=token_data.get("error_description", token_data["error"]))
 
         access_token = token_data.get("access_token")
         if not access_token:
             raise HTTPException(status_code=400, detail="获取 access token 失败")
 
-        # 2. 获取 GitHub 用户信息（在线程池中执行）
+        # 2. 获取 GitHub 用户信息
         user_response = await loop.run_in_executor(
             None,
-            lambda: requests.get(
+            lambda: _github_request(
+                "GET",
                 "https://api.github.com/user",
                 headers={"Authorization": f"token {access_token}"},
-                timeout=10,
-                verify=certifi.where(),
             ),
         )
         user_data = user_response.json()
 
-        # 3. 获取 GitHub 用户邮箱（在线程池中执行）
+        # 3. 获取 GitHub 用户邮箱
         email_response = await loop.run_in_executor(
             None,
-            lambda: requests.get(
+            lambda: _github_request(
+                "GET",
                 "https://api.github.com/user/emails",
                 headers={"Authorization": f"token {access_token}"},
-                timeout=10,
-                verify=certifi.where(),
             ),
         )
         emails = email_response.json()

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend.chain.multimodal_chain import get_multimodal_rag_chain
@@ -14,16 +14,6 @@ from backend.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/multimodal", tags=["多模态问答"])
-
-
-class MultimodalChatRequest(BaseModel):
-    """多模态聊天请求"""
-
-    message: str
-    images: List[str] = []
-    session_id: Optional[str] = None
-    use_rag: bool = True
-    top_k: int = 3
 
 
 class MultimodalChatResponse(BaseModel):
@@ -35,12 +25,6 @@ class MultimodalChatResponse(BaseModel):
     references: List[dict] = []
 
 
-class ImageDescriptionRequest(BaseModel):
-    """图片描述请求"""
-
-    image: str
-
-
 class ImageDescriptionResponse(BaseModel):
     """图片描述响应"""
 
@@ -48,26 +32,55 @@ class ImageDescriptionResponse(BaseModel):
 
 
 @router.post("/chat", response_model=MultimodalChatResponse)
-async def multimodal_chat(request: MultimodalChatRequest):
-    """多模态聊天接口"""
+async def multimodal_chat(
+    message: str = Form(..., description="用户消息"),
+    files: List[UploadFile] = File(default=[]),
+    session_id: Optional[str] = Form(None),
+    use_rag: bool = Form(True),
+    top_k: int = Form(3),
+):
+    """多模态聊天接口（FormData 上传图片+文本）"""
     try:
-        session_id = request.session_id or str(uuid4())
+        sid = session_id or str(uuid4())
+        allowed_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+        tmp_paths: List[str] = []
+        tmp_files: List[str] = []
 
-        mm_chain = get_multimodal_rag_chain()
-        result = await mm_chain.async_run(
-            query=request.message,
-            image_paths=request.images,
-            top_k=request.top_k,
-            use_rag=request.use_rag,
-        )
+        for file in files:
+            if not file.filename:
+                continue
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext not in allowed_extensions:
+                raise HTTPException(status_code=400, detail=f"不支持的图片格式: {file_ext}")
 
-        return MultimodalChatResponse(
-            answer=result["answer"],
-            session_id=session_id,
-            image_descriptions=result.get("image_descriptions", []),
-            references=result.get("references", []),
-        )
+            content = await file.read()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+                tmp_file.write(content)
+                tmp_paths.append(tmp_file.name)
+                tmp_files.append(tmp_file.name)
 
+        try:
+            mm_chain = get_multimodal_rag_chain()
+            result = await mm_chain.async_run(
+                query=message,
+                image_paths=tmp_paths,
+                top_k=top_k,
+                use_rag=use_rag,
+            )
+
+            return MultimodalChatResponse(
+                answer=result["answer"],
+                session_id=sid,
+                image_descriptions=result.get("image_descriptions", []),
+                references=result.get("references", []),
+            )
+        finally:
+            for p in tmp_files:
+                if Path(p).exists():
+                    Path(p).unlink()
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"多模态聊天失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"多模态聊天失败: {str(e)}")
@@ -75,7 +88,7 @@ async def multimodal_chat(request: MultimodalChatRequest):
 
 @router.post("/chat/image-only")
 async def chat_with_image_only(
-    message: str,
+    message: str = Form(..., description="用户消息"),
     file: UploadFile = File(...),
 ):
     """仅使用图片进行问答（不进行 RAG 检索）"""

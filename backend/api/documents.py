@@ -1,11 +1,14 @@
 """文档管理 API 路由"""
 
+import tempfile
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from backend.data_loader.manager import get_document_manager
+from backend.data_loader.pdf_processor import extract_pdf_text
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -20,6 +23,9 @@ class DocumentUploadResponse(BaseModel):
     document_id: Optional[str] = None
     file_name: Optional[str] = None
     error: Optional[str] = None
+    skipped: Optional[bool] = None
+    version: Optional[int] = None
+    message: Optional[str] = None
 
 
 class DocumentInfo(BaseModel):
@@ -77,15 +83,37 @@ async def upload_document(
     """
     try:
         content = await file.read()
-        try:
-            text_content = content.decode("utf-8")
-        except UnicodeDecodeError:
-            text_content = content.decode("gbk", errors="replace")
+        file_name = file.filename or "unknown.txt"
+        ext = Path(file_name).suffix.lower()
+
+        if ext == ".pdf":
+            # PDF 文件：写入临时文件，使用 PDFProcessor 提取文本
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+
+            try:
+                text_content = extract_pdf_text(tmp_path, use_ocr=True)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
+
+            if not text_content.strip():
+                return DocumentUploadResponse(
+                    success=False,
+                    error="PDF 文件未能提取到文本内容（可能是扫描件且 OCR 不可用）",
+                )
+            logger.info(f"PDF 文本提取成功: {len(text_content)} 字符, file={file_name}")
+        else:
+            # 非 PDF 文件：文本解码
+            try:
+                text_content = content.decode("utf-8")
+            except UnicodeDecodeError:
+                text_content = content.decode("gbk", errors="replace")
 
         doc_manager = get_document_manager()
         result = await doc_manager.upload_document(
             file_content=text_content,
-            file_name=file.filename or "unknown.txt",
+            file_name=file_name,
             description=description,
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -96,6 +124,9 @@ async def upload_document(
                 success=True,
                 document_id=result.get("document_id"),
                 file_name=result.get("file_name"),
+                skipped=result.get("skipped"),
+                version=result.get("version"),
+                message=result.get("message"),
             )
         else:
             return DocumentUploadResponse(

@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     llm_timeout: int = Field(default=60, ge=10, description="LLM 调用超时时间（秒）")
     llm_max_retries: int = Field(default=3, ge=0, description="LLM 调用最大重试次数")
 
+    # Agent 配置
+    agent_max_steps: int = Field(default=8, ge=1, le=20, description="Agent 默认最大有效步数")
+    agent_hard_max_steps: int = Field(default=15, ge=5, le=30, description="Agent 绝对步数硬上限")
+    agent_timeout_per_step: float = Field(default=15.0, ge=5.0, description="单工具执行超时（秒）")
+    agent_max_retries_per_tool: int = Field(default=3, ge=1, description="单工具最大连续失败重试次数")
+
     # 阿里云配置
     aliyun_access_key_id: str = Field(default="", description="阿里云 AccessKey ID")
     aliyun_access_key_secret: str = Field(default="", description="阿里云 AccessKey Secret")
@@ -97,6 +103,11 @@ class Settings(BaseSettings):
     github_redirect_uri: str = Field(
         default="http://localhost:8000/api/auth/github/callback", description="GitHub 回调地址"
     )
+
+    # 多模态 / 视觉模型配置
+    vision_provider: str = Field(default="qwen", description="视觉模型提供商 (openai / anthropic / qwen)")
+    vision_model: str = Field(default="qwen-vl-max", description="视觉模型名称")
+    vision_api_key: str = Field(default="", description="视觉模型 API Key（默认复用 DASHSCOPE_API_KEY）")
 
     # 登录限流配置
     login_max_attempts: int = Field(default=5, ge=1, description="登录最大失败次数")
@@ -118,6 +129,9 @@ class Settings(BaseSettings):
     # 追踪配置
     tracing_enabled: bool = Field(default=True, description="是否启用分布式追踪")
     tracing_sample_rate: float = Field(default=1.0, ge=0, le=1, description="追踪采样率")
+
+    # 日志配置
+    json_log_enabled: bool = Field(default=True, description="是否启用 JSON 结构化日志")
 
     @field_validator("log_level")
     @classmethod

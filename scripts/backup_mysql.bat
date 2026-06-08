@@ -38,21 +38,21 @@ docker exec enterprise-doc-qa-mysql-test mysqldump -u%DB_USER% -p%DB_PASSWORD% %
 if %ERRORLEVEL% EQU 0 (
     echo ✓ 备份成功!
     echo.
-    
+
     REM 压缩备份文件
     echo 压缩备份文件...
     powershell -Command "Compress-Archive -Path '%BACKUP_DIR%\%DB_NAME%_%DATE%.sql' -DestinationPath '%BACKUP_DIR%\%DB_NAME%_%DATE%.zip' -Force"
-    
+
     if %ERRORLEVEL% EQU 0 (
         echo ✓ 压缩成功!
         del "%BACKUP_DIR%\%DB_NAME%_%DATE%.sql"
-        
+
         REM 清理旧备份
         echo.
         echo 清理 %RETENTION_DAYS% 天前的备份...
         forfiles /P "%BACKUP_DIR%" /M *.zip /D -%RETENTION_DAYS% /C "cmd /c del @path"
         echo ✓ 清理完成!
-        
+
         echo.
         echo ========================================
         echo 备份完成!

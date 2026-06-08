@@ -3,11 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.auth.permission_manager import (
-    PermissionAction,
-    PermissionResource,
-    get_permission_manager,
-)
+from backend.auth.permission_manager import PermissionAction, PermissionResource, get_permission_manager
 from backend.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -75,7 +71,7 @@ async def grant_permission(
     try:
         perm_manager = get_permission_manager()
 
-        success = perm_manager.grant_permission(
+        success = await perm_manager.grant_permission(
             user_id=request.user_id,
             resource_type=PermissionResource(request.resource_type),
             resource_id=request.resource_id,
@@ -104,7 +100,7 @@ async def revoke_permission(
     try:
         perm_manager = get_permission_manager()
 
-        success = perm_manager.revoke_permission(
+        success = await perm_manager.revoke_permission(
             user_id=request.user_id,
             resource_type=PermissionResource(request.resource_type),
             resource_id=request.resource_id,
@@ -131,7 +127,7 @@ async def check_permission(
     try:
         perm_manager = get_permission_manager()
 
-        has_permission = perm_manager.check_permission(
+        has_permission = await perm_manager.check_permission(
             user_id=request.user_id,
             resource_type=PermissionResource(request.resource_type),
             resource_id=request.resource_id,
@@ -158,7 +154,7 @@ async def get_user_permissions(user_id: str):
     """获取用户所有权限"""
     try:
         perm_manager = get_permission_manager()
-        permissions = perm_manager.get_user_permissions(user_id)
+        permissions = await perm_manager.get_user_permissions(user_id)
 
         return {"user_id": user_id, "permissions": permissions}
 
@@ -172,7 +168,7 @@ async def get_resource_acl(resource_type: str, resource_id: str):
     """获取资源 ACL"""
     try:
         perm_manager = get_permission_manager()
-        acl = perm_manager.get_resource_acl(
+        acl = await perm_manager.get_resource_acl(
             resource_type=PermissionResource(resource_type),
             resource_id=resource_id,
         )
@@ -195,7 +191,7 @@ async def create_role(
     try:
         perm_manager = get_permission_manager()
 
-        role_id = perm_manager.create_role(
+        role_id = await perm_manager.create_role(
             role_name=request.name,
             description=request.description,
             permissions=request.permissions,
@@ -216,7 +212,7 @@ async def get_all_roles():
     """获取所有角色"""
     try:
         perm_manager = get_permission_manager()
-        roles = perm_manager.get_all_roles()
+        roles = await perm_manager.get_all_roles()
 
         return {"roles": roles}
 
@@ -230,13 +226,34 @@ async def get_role_detail(role_id: str):
     """获取角色详情"""
     try:
         perm_manager = get_permission_manager()
-        permissions = perm_manager.get_role_permissions(role_id)
+        permissions = await perm_manager.get_role_permissions(role_id)
 
         return {"role_id": role_id, "permissions": permissions}
 
     except Exception as e:
         logger.error(f"获取角色详情失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"获取角色详情失败: {str(e)}")
+
+
+@router.delete("/roles/{role_id}")
+async def delete_role(
+    role_id: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """删除角色"""
+    try:
+        perm_manager = get_permission_manager()
+
+        success = await perm_manager.delete_role(role_id)
+
+        if success:
+            return {"status": "success", "message": "角色删除成功"}
+        else:
+            raise HTTPException(status_code=500, detail="角色删除失败")
+
+    except Exception as e:
+        logger.error(f"删除角色失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"删除角色失败: {str(e)}")
 
 
 @router.post("/roles/assign")
@@ -248,7 +265,7 @@ async def assign_role(
     try:
         perm_manager = get_permission_manager()
 
-        success = perm_manager.assign_role_to_user(
+        success = await perm_manager.assign_role_to_user(
             user_id=request.user_id,
             role_id=request.role_id,
             assigned_by=current_user_id,
@@ -272,7 +289,7 @@ async def remove_role(
     try:
         perm_manager = get_permission_manager()
 
-        success = perm_manager.remove_role_from_user(
+        success = await perm_manager.remove_role_from_user(
             user_id=request.user_id,
             role_id=request.role_id,
         )
@@ -290,20 +307,10 @@ async def remove_role(
 @router.get("/resource-types")
 async def get_resource_types():
     """获取资源类型列表"""
-    return {
-        "resource_types": [
-            {"value": rt.value, "name": rt.name}
-            for rt in PermissionResource
-        ]
-    }
+    return {"resource_types": [{"value": rt.value, "name": rt.name} for rt in PermissionResource]}
 
 
 @router.get("/actions")
 async def get_actions():
     """获取操作类型列表"""
-    return {
-        "actions": [
-            {"value": pa.value, "name": pa.name}
-            for pa in PermissionAction
-        ]
-    }
+    return {"actions": [{"value": pa.value, "name": pa.name} for pa in PermissionAction]}

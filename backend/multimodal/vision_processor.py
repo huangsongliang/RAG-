@@ -147,12 +147,17 @@ class VisionProcessor:
 
     def _describe_qwen(self, image_path: str, prompt: str) -> str:
         """使用阿里 Qwen-VL 描述图片"""
+        # 解析为绝对路径（修复 Windows 短名路径如 ~1 的问题）
+        import os
+
         from dashscope import MultiModalConversation
+
+        resolved_path = os.path.abspath(image_path)
 
         messages = [
             {
                 "role": "user",
-                "content": [{"text": prompt}, {"image": image_path}],
+                "content": [{"text": prompt}, {"image": resolved_path}],
             }
         ]
 

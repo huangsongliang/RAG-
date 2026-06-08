@@ -40,6 +40,10 @@ class DocumentManager:
         """
         上传并索引文档
 
+        重复检测规则：
+        - 相同内容 + 相同文件名 + 活跃状态 → 跳过，返回已有文档信息
+        - 相同文件名 + 不同内容 + 活跃状态 → 自动版本更新
+
         Args:
             file_content: 文件内容
             file_name: 文件名
@@ -50,24 +54,52 @@ class DocumentManager:
         Returns:
             上传结果
         """
-        document_id = str(uuid.uuid4())
         file_hash = self._compute_hash(file_content)
-        file_path = self.upload_dir / f"{document_id}_{file_name}"
 
         try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(file_content)
-
             async with get_db_session() as session:
-                existing_doc = await session.execute(
-                    select(DocumentLibrary).where(DocumentLibrary.document_id == document_id)
+                # 1. 内容去重：相同 hash + 相同文件名 + 活跃
+                exact_duplicate = await session.execute(
+                    select(DocumentLibrary).where(
+                        DocumentLibrary.file_hash == file_hash,
+                        DocumentLibrary.name == file_name,
+                        DocumentLibrary.is_active.is_(True),
+                    )
                 )
-                existing_doc = existing_doc.scalar_one_or_none()
+                exact_duplicate = exact_duplicate.scalar_one_or_none()
 
-                if existing_doc:
+                if exact_duplicate:
+                    logger.info(
+                        "文档内容未变化，跳过重复上传: %s (doc_id=%s)",
+                        file_name,
+                        exact_duplicate.document_id,
+                    )
+                    return {
+                        "success": True,
+                        "skipped": True,
+                        "document_id": exact_duplicate.document_id,
+                        "file_name": file_name,
+                        "message": f"文档「{file_name}」内容未变化，已跳过重复上传",
+                    }
+
+                # 2. 同名文档 → 自动版本更新
+                existing_by_name = await session.execute(
+                    select(DocumentLibrary).where(
+                        DocumentLibrary.name == file_name,
+                        DocumentLibrary.is_active.is_(True),
+                    )
+                )
+                existing_by_name = existing_by_name.scalar_one_or_none()
+
+                if existing_by_name:
+                    document_id = existing_by_name.document_id
+                    file_path = self.upload_dir / f"{document_id}_{file_name}"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(file_content)
+
                     await self._update_document(
                         session,
-                        existing_doc,
+                        existing_by_name,
                         file_content,
                         file_name,
                         file_hash,
@@ -76,25 +108,48 @@ class DocumentManager:
                         chunk_size,
                         chunk_overlap,
                     )
-                else:
-                    await self._create_document(
-                        session,
-                        document_id,
-                        file_content,
+                    await session.commit()
+
+                    reload_hybrid_retriever()
+
+                    logger.info(
+                        "文档版本更新成功: %s v%s (doc_id=%s)",
                         file_name,
-                        str(file_path),
-                        file_hash,
-                        len(file_content),
-                        description,
-                        chunk_size,
-                        chunk_overlap,
+                        existing_by_name.version,
+                        document_id,
                     )
 
+                    return {
+                        "success": True,
+                        "document_id": document_id,
+                        "file_name": file_name,
+                        "version": existing_by_name.version,
+                        "message": f"文档「{file_name}」已更新至 v{existing_by_name.version}",
+                    }
+
+                # 3. 全新文档
+                document_id = str(uuid.uuid4())
+                file_path = self.upload_dir / f"{document_id}_{file_name}"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(file_content)
+
+                await self._create_document(
+                    session,
+                    document_id,
+                    file_content,
+                    file_name,
+                    str(file_path),
+                    file_hash,
+                    len(file_content),
+                    description,
+                    chunk_size,
+                    chunk_overlap,
+                )
                 await session.commit()
 
                 reload_hybrid_retriever()
 
-                logger.info(f"文档上传成功: {file_name}, " f"doc_id={document_id}")
+                logger.info("文档上传成功: %s (doc_id=%s)", file_name, document_id)
 
                 return {
                     "success": True,

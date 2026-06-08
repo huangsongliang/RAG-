@@ -16,12 +16,14 @@ logger = get_logger(__name__)
 
 
 # 危险的SQL模式 - 用于检测潜在的SQL注入
+# 注意：不拦截单独的引号字符，避免影响正常聊天
+# 只匹配 SQL 关键字和可疑模式
 DANGEROUS_SQL_PATTERNS = [
-    r"(union|select|insert|update|delete|drop|alter|create)\s+",
+    r"(union\s+select|insert\s+into|update\s+\w+\s+set|delete\s+from|drop\s+table|alter\s+table|create\s+table)",
     r"or\s+\d+\s*=\s*\d+",
     r"and\s+\d+\s*=\s*\d+",
-    r"--|;|/\*|\*/",
-    r"'|\"|`",
+    r"--|;",
+    r"/\*.*\*/",
     r"exec\s+\w+",
     r"sp_\w+",
     r"xp_\w+",
@@ -99,7 +101,7 @@ class SQLInjectionProtectionMiddleware(BaseHTTPMiddleware):
                                 content={"detail": "Request contains suspicious patterns"},
                             )
             except Exception:
-                pass
+                logger.debug("无法解析请求体进行 SQL 注入检测：非 JSON 请求体或流式请求")
 
         response = await call_next(request)
         return response

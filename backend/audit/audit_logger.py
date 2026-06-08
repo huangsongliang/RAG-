@@ -2,6 +2,7 @@
 记录所有系统操作，支持查询和分析
 """
 
+import asyncio
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -81,19 +82,25 @@ class AuditLogger:
         self.buffer.append(log_entry)
 
         if len(self.buffer) >= self.buffer_size:
-            self._flush_buffer()
+            try:
+                asyncio.create_task(self._flush_buffer())
+            except RuntimeError:
+                pass  # 无运行中的事件循环，跳过刷新
 
         logger.info(f"审计日志: action={action}, user={user_id}, resource={resource_type}/{resource_id}")
         return log_id
 
-    def _flush_buffer(self):
+    async def _flush_buffer(self):
         """刷新缓冲区到数据库"""
         if not self.buffer:
             return
 
+        batch = self.buffer
+        self.buffer = []
+
         try:
-            for entry in self.buffer:
-                db.execute(
+            for entry in batch:
+                await db.execute(
                     """
                     INSERT INTO audit_logs (
                         id, action, category, user_id, resource_type, resource_id,
@@ -116,15 +123,12 @@ class AuditLogger:
                     ),
                 )
 
-            db.commit()
-            logger.info(f"审计日志刷新完成: {len(self.buffer)} 条记录")
-            self.buffer.clear()
+            logger.info(f"审计日志刷新完成: {len(batch)} 条记录")
 
         except Exception as e:
             logger.error(f"审计日志刷新失败: {str(e)}")
-            db.rollback()
 
-    def query(
+    async def query(
         self,
         user_id: Optional[str] = None,
         action: Optional[AuditAction] = None,
@@ -186,7 +190,7 @@ class AuditLogger:
             """
             params.extend([limit, offset])
 
-            result = db.execute(query, tuple(params))
+            result = await db.execute(query, tuple(params))
 
             logs = []
             for row in result.fetchall():
@@ -212,7 +216,7 @@ class AuditLogger:
             logger.error(f"查询审计日志失败: {str(e)}")
             return []
 
-    def get_user_activity(
+    async def get_user_activity(
         self,
         user_id: str,
         days: int = 7,
@@ -220,52 +224,52 @@ class AuditLogger:
     ) -> List[Dict[str, Any]]:
         """获取用户活动日志"""
         start_time = datetime.now() - timedelta(days=days)
-        return self.query(
+        return await self.query(
             user_id=user_id,
             start_time=start_time,
             limit=limit,
         )
 
-    def get_resource_history(
+    async def get_resource_history(
         self,
         resource_type: str,
         resource_id: str,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """获取资源操作历史"""
-        return self.query(
+        return await self.query(
             resource_type=resource_type,
             resource_id=resource_id,
             limit=limit,
         )
 
-    def get_failed_attempts(
+    async def get_failed_attempts(
         self,
         hours: int = 24,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """获取失败的操作"""
         start_time = datetime.now() - timedelta(hours=hours)
-        return self.query(
+        return await self.query(
             status="failed",
             start_time=start_time,
             limit=limit,
         )
 
-    def get_security_events(
+    async def get_security_events(
         self,
         days: int = 7,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """获取安全事件"""
         start_time = datetime.now() - timedelta(days=days)
-        return self.query(
+        return await self.query(
             category=AuditCategory.SECURITY,
             start_time=start_time,
             limit=limit,
         )
 
-    def get_statistics(
+    async def get_statistics(
         self,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -279,7 +283,7 @@ class AuditLogger:
 
             stats = {}
 
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT action, COUNT(*) as count
                 FROM audit_logs
@@ -290,7 +294,7 @@ class AuditLogger:
             )
             stats["actions"] = {row[0]: row[1] for row in result.fetchall()}
 
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT category, COUNT(*) as count
                 FROM audit_logs
@@ -301,7 +305,7 @@ class AuditLogger:
             )
             stats["categories"] = {row[0]: row[1] for row in result.fetchall()}
 
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT user_id, COUNT(*) as count
                 FROM audit_logs
@@ -314,7 +318,7 @@ class AuditLogger:
             )
             stats["top_users"] = [{"user_id": row[0], "count": row[1]} for row in result.fetchall()]
 
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT COUNT(*) FROM audit_logs
                 WHERE created_at BETWEEN %s AND %s
@@ -323,7 +327,7 @@ class AuditLogger:
             )
             stats["total_count"] = result.fetchone()[0]
 
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT COUNT(*) FROM audit_logs
                 WHERE created_at BETWEEN %s AND %s AND status = 'failed'
@@ -338,25 +342,25 @@ class AuditLogger:
             logger.error(f"获取审计统计失败: {str(e)}")
             return {}
 
-    def export_logs(
+    async def export_logs(
         self,
         start_time: datetime,
         end_time: datetime,
         format: str = "json",
     ) -> List[Dict[str, Any]]:
         """导出审计日志"""
-        return self.query(
+        return await self.query(
             start_time=start_time,
             end_time=end_time,
             limit=10000,
         )
 
-    def cleanup_old_logs(self, days: int = 90) -> int:
+    async def cleanup_old_logs(self, days: int = 90) -> int:
         """清理旧日志"""
         try:
             cutoff_time = datetime.now() - timedelta(days=days)
 
-            db.execute(
+            result = await db.execute(
                 """
                 DELETE FROM audit_logs
                 WHERE created_at < %s
@@ -364,15 +368,13 @@ class AuditLogger:
                 (cutoff_time,),
             )
 
-            deleted_count = db.rowcount
-            db.commit()
+            deleted_count = result.rowcount
 
             logger.info(f"审计日志清理完成: 删除 {deleted_count} 条旧记录")
             return deleted_count
 
         except Exception as e:
             logger.error(f"清理审计日志失败: {str(e)}")
-            db.rollback()
             return 0
 
 

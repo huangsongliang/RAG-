@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { get, post, clearAuthTokens } from '../utils/request'
+import { useChatStore } from './chat'
 
 export interface User {
   id: number
@@ -33,6 +34,8 @@ export const useAuthStore = defineStore('auth', () => {
     })
     setTokens(data.access_token, data.refresh_token)
     await fetchUser()
+    const chatStore = useChatStore()
+    await chatStore.fetchSessions()
   }
 
   async function loginWithPhone(phone: string, code: string): Promise<void> {
@@ -42,6 +45,8 @@ export const useAuthStore = defineStore('auth', () => {
     })
     setTokens(data.access_token, data.refresh_token)
     await fetchUser()
+    const chatStore = useChatStore()
+    await chatStore.fetchSessions()
   }
 
   async function register(username: string, email: string, password: string): Promise<void> {

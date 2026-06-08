@@ -79,8 +79,24 @@ class GraphQuery:
             return {}
 
     def _mock_find_neighbors(self, node_id: str, depth: int) -> Dict[str, List[Node]]:
-        """模拟查找邻居"""
-        return {}
+        """内存存储查找邻居"""
+        if not hasattr(self.storage, "_mock_nodes") or not hasattr(self.storage, "_mock_edges"):
+            return {}
+
+        neighbors: Dict[str, List[Node]] = {}
+        # 只查一层深度的直连节点
+        for edge in self.storage._mock_edges:
+            # outgoing: source → target
+            if edge.source_id == node_id:
+                target_node = self.storage._mock_nodes.get(edge.target_id)
+                if target_node:
+                    neighbors.setdefault(edge.relation_type, []).append(target_node)
+            # incoming: target ← source (undirected)
+            if edge.target_id == node_id:
+                source_node = self.storage._mock_nodes.get(edge.source_id)
+                if source_node:
+                    neighbors.setdefault(edge.relation_type, []).append(source_node)
+        return neighbors
 
     def find_path(self, source_id: str, target_id: str, max_length: int = 5) -> List[List[Dict[str, str]]]:
         """查找两点之间的所有路径
@@ -279,8 +295,27 @@ class GraphQuery:
         Returns:
             匹配的节点列表
         """
-        if not keyword or not self.storage.driver:
+        if not keyword:
             return []
+
+        if not self.storage.driver:
+            # 内存存储搜索
+            results: List[Node] = []
+            keyword_lower = keyword.lower()
+            for node in self.storage._mock_nodes.values():
+                if label and node.label != label:
+                    continue
+                # 搜索节点属性值
+                match = False
+                for val in node.properties.values():
+                    if keyword_lower in val.lower():
+                        match = True
+                        break
+                if match:
+                    results.append(node)
+                    if len(results) >= limit:
+                        break
+            return results
 
         try:
             with self.storage.driver.session() as session:

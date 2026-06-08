@@ -54,7 +54,7 @@ if "%CHOICE%"=="1" (
     echo.
     set /p DOMAIN="请输入域名 (例如: example.com): "
     set /p EMAIL="请输入邮箱: "
-    
+
     REM 生成 Git Bash 命令
     echo.
     echo ==========================================
@@ -81,7 +81,7 @@ if "%CHOICE%"=="2" (
     echo.
     set /p DOMAIN="请输入域名 (例如: example.com): "
     set /p EMAIL="请输入邮箱: "
-    
+
     echo.
     echo ==========================================
     echo 请在 WSL 终端中运行以下命令:
@@ -106,7 +106,7 @@ if "%CHOICE%"=="3" (
     echo 生成配置示例...
     set /p DOMAIN="请输入域名: "
     set /p EMAIL="请输入邮箱: "
-    
+
     echo.
     echo ==========================================
     echo ACME.sh 配置示例

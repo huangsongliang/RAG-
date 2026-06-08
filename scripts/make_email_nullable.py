@@ -16,7 +16,7 @@ from sqlalchemy import text
 async def make_email_nullable():
     """修改 email 字段允许为空"""
     print("开始修改 email 字段...")
-    
+
     async with get_db_session() as session:
         try:
             # 修改 email 字段允许为空
@@ -26,10 +26,10 @@ async def make_email_nullable():
             """)
             await session.execute(alter_query)
             await session.commit()
-            
+
             print("✅ email 字段已修改为允许为空！")
             return True
-            
+
         except Exception as e:
             print(f"❌ 修改失败: {e}")
             await session.rollback()

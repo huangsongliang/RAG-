@@ -1,5 +1,6 @@
 <template>
   <button
+    v-if="visible"
     class="theme-toggle"
     @click="toggleTheme"
     :title="isDark ? '切换到浅色主题' : '切换到深色主题'"
@@ -10,7 +11,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+
+// 只在这些路由上显示固定主题切换按钮
+const visibleRoutes = ['/', '/chat', '/login', '/register']
+const route = useRoute()
+const visible = computed(() => visibleRoutes.includes(route.path))
 
 const isDark = ref(false)
 

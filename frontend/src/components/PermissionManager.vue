@@ -289,7 +289,9 @@ async function handleDeleteRole(role: RoleInfo) {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
     })
-    notifStore.toastInfo('删除角色功能需后端支持 DELETE /api/permissions/roles/{id}')
+    await permissionApi.deleteRole(role.id)
+    notifStore.toastSuccess('角色已删除')
+    loadRoles()
   } catch { /* cancel */ }
 }
 

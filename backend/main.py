@@ -3,6 +3,7 @@
 import signal
 import time
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,27 +13,24 @@ from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer
 
 from backend.api import (
-    ab_test_router,
     agent_router,
-    agents_router,
     alerts_router,
     audit_router,
     auth_router,
     chart_router,
     chat_router,
     cicd_router,
-    debug_router,
-    deployment_router,
-    dify_router,
     document_router,
     documents_router,
     knowledge_graph_router,
+    link_parser_router,
     multimodal_router,
     notification_router,
     permission_router,
     plugins_router,
     summary_router,
     tracing_router,
+    unified_chat_router,
     versioning_router,
     workflow_router,
 )
@@ -47,7 +45,7 @@ from backend.middleware.security import (
 from backend.utils.alerting import start_alerting, stop_alerting
 from backend.utils.error_tracking import setup_exception_handlers
 from backend.utils.health import perform_health_check, shutdown_manager
-from backend.utils.logger import get_logger
+from backend.utils.logger import get_logger, set_request_id
 from backend.utils.performance import generate_prometheus_metrics, get_prometheus_content_type
 from backend.utils.rate_limiter import concurrency_limit_middleware, rate_limit_middleware
 from backend.utils.warnings import *  # noqa: F401, F403
@@ -264,6 +262,17 @@ app.add_middleware(XSSProtectionMiddleware)
 app.add_middleware(VersionMiddleware)
 
 
+# 请求追踪 ID 中间件（必须在其他中间件之前）
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    """为每个请求注入请求追踪 ID，支持链路追踪"""
+    request_id = request.headers.get("X-Request-ID", str(uuid4()))
+    set_request_id(request_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
 # 限流中间件（性能保护）
 @app.middleware("http")
 async def add_rate_limit_middleware(request, call_next):
@@ -288,10 +297,6 @@ async def add_request_count_middleware(request, call_next):
 
 # 注册路由
 app.include_router(chat_router)
-app.include_router(ab_test_router)
-app.include_router(agents_router)
-app.include_router(deployment_router)
-app.include_router(dify_router)
 app.include_router(documents_router)
 app.include_router(auth_router)
 app.include_router(alerts_router)
@@ -300,13 +305,13 @@ app.include_router(summary_router)
 app.include_router(knowledge_graph_router)
 app.include_router(chart_router)
 app.include_router(workflow_router)
-app.include_router(debug_router)
 app.include_router(cicd_router)
 # 新增路由注册
 app.include_router(audit_router)
 app.include_router(document_router)
 app.include_router(multimodal_router)
 app.include_router(notification_router)
+app.include_router(unified_chat_router)
 app.include_router(permission_router)
 app.include_router(plugins_router)
 app.include_router(tracing_router)

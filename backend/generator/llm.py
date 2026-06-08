@@ -9,7 +9,7 @@ import os
 from asyncio import Queue
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
-from typing import Annotated, Any, AsyncGenerator, List
+from typing import Annotated, Any, AsyncGenerator, Dict, List, Optional
 
 from dashscope import Generation, TextEmbedding
 from fastapi import Depends
@@ -34,7 +34,7 @@ class AsyncLLM:
         self._executor = ThreadPoolExecutor(max_workers=4)
 
     async def invoke(self, prompt: str, **kwargs) -> Any:
-        """异步调用 - 使用线程池执行"""
+        """异步调用 - 使用线程池执行（Completion 模式，兼容旧接口）"""
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(self._executor, self._sync_invoke, prompt, kwargs)
         return response
@@ -44,6 +44,31 @@ class AsyncLLM:
         response = Generation.call(
             model=self.model,
             prompt=prompt,
+            temperature=kwargs.get("temperature", self.temperature),
+            max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            result_format="message",
+        )
+        return response
+
+    async def invoke_messages(self, messages: List[Dict[str, str]], **kwargs) -> Any:
+        """异步调用 - 使用 Chat Messages 模式（结构化消息）
+
+        Args:
+            messages: [{"role": "system", "content": "..."},
+                        {"role": "user", "content": "..."}]
+            **kwargs: 同 invoke
+
+        Returns:
+            DashScope API 响应
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(self._executor, self._sync_invoke_messages, messages, kwargs)
+
+    def _sync_invoke_messages(self, messages: List[Dict[str, str]], kwargs) -> Any:
+        """同步调用 Messages 模式（在线程池中执行）"""
+        response = Generation.call(
+            model=self.model,
+            messages=messages,
             temperature=kwargs.get("temperature", self.temperature),
             max_tokens=kwargs.get("max_tokens", self.max_tokens),
             result_format="message",

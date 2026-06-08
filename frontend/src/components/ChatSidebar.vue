@@ -71,6 +71,22 @@
         <span class="nav-icon">🧩</span>
         <span>插件市场</span>
       </button>
+      <button
+        class="nav-item nav-item-highlight"
+        :class="{ active: currentRoute === '/knowledge-graph' }"
+        @click="navigate('/knowledge-graph')"
+      >
+        <span class="nav-icon">🕸️</span>
+        <span>知识图谱</span>
+      </button>
+      <button
+        class="nav-item nav-item-highlight"
+        :class="{ active: currentRoute === '/multimodal' }"
+        @click="navigate('/multimodal')"
+      >
+        <span class="nav-icon">🖼️</span>
+        <span>多模态</span>
+      </button>
     </div>
 
     <div class="chat-list">
@@ -144,6 +160,7 @@ let unreadTimer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   if (authStore.isLoggedIn) {
     notifStore.fetchNotifications(false, 1) // 仅触发计数更新
+    store.fetchSessions()  // 加载历史会话列表
     unreadTimer = setInterval(() => {
       notifStore.fetchNotifications(false, 1)
     }, 30000) // 每 30 秒刷新
@@ -170,6 +187,11 @@ function selectSession(sessionId: string) {
     router.push('/')
   }
   store.selectSession(sessionId)
+  // 加载历史消息
+  const session = store.sessions.find(s => s.id === sessionId)
+  if (session && session.messages.length === 0) {
+    store.loadSessionMessages(sessionId)
+  }
 }
 
 function deleteSession(sessionId: string) {
@@ -370,38 +392,59 @@ function toggleSettings() {
 }
 
 .nav-menu {
-  display: flex;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
   margin-bottom: 20px;
 }
 
 .nav-item {
-  flex: 1;
-  padding: 10px;
+  padding: 8px 4px;
   border: none;
-  background: transparent;
-  border-radius: var(--radius-md);
+  background: rgba(139, 115, 85, 0.04);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  font-size: 12px;
+  gap: 3px;
+  font-size: 11px;
   color: var(--color-ink-light);
   transition: all 0.2s ease;
+  position: relative;
+  min-height: 48px;
+  justify-content: center;
 }
 
 .nav-item:hover {
-  background: rgba(139, 115, 85, 0.08);
+  background: rgba(139, 115, 85, 0.12);
+  color: var(--color-ink-black);
 }
 
 .nav-item.active {
-  background: rgba(139, 115, 85, 0.15);
-  color: var(--color-accent);
+  background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-light) 100%);
+  color: #fff;
+}
+
+.nav-item-highlight {
+  background: linear-gradient(135deg, rgba(33, 150, 243, 0.06) 0%, rgba(33, 150, 243, 0.12) 100%);
+  border: 1px solid rgba(33, 150, 243, 0.2);
+}
+
+.nav-item-highlight:hover {
+  background: linear-gradient(135deg, rgba(33, 150, 243, 0.12) 0%, rgba(33, 150, 243, 0.2) 100%);
+  border-color: rgba(33, 150, 243, 0.35);
+}
+
+.nav-item-highlight.active {
+  background: linear-gradient(135deg, #1976d2 0%, #2196f3 100%);
+  border-color: #2196f3;
+  color: #fff;
 }
 
 .nav-icon {
-  font-size: 18px;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .nav-icon-bell {
@@ -410,24 +453,21 @@ function toggleSettings() {
 
 .notif-badge {
   position: absolute;
-  top: 2px;
-  right: -6px;
+  top: 0;
+  right: -4px;
   background: var(--color-error);
   color: white;
-  font-size: 10px;
-  font-weight: 600;
-  min-width: 18px;
-  height: 18px;
-  border-radius: 9px;
+  font-size: 8px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 5px;
+  padding: 0 4px;
   line-height: 1;
-}
-
-.nav-item {
-  position: relative;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
 }
 
 .sidebar-footer {

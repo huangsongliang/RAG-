@@ -231,13 +231,44 @@ class DeploymentABTestManager:
         logger.info(f"归档实验: {experiment.name}")
         return True
 
+    def delete_experiment(self, experiment_id: str) -> bool:
+        """删除实验及其结果数据"""
+        if experiment_id not in self._experiments:
+            return False
+
+        experiment_name = self._experiments[experiment_id].name
+        del self._experiments[experiment_id]
+        self._results.pop(experiment_id, None)
+
+        # 清理相关用户分配缓存
+        keys_to_remove = [k for k in self._user_assignments if k.startswith(f"{experiment_id}:")]
+        for key in keys_to_remove:
+            del self._user_assignments[key]
+
+        logger.info(f"删除实验: {experiment_name} ({experiment_id})")
+        return True
+
     def assign_group(
         self,
         experiment_id: str,
         user_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> Optional[ExperimentGroup]:
-        """为用户分配实验分组"""
+        """为用户分配实验分组
+
+        Args:
+            experiment_id: 实验 ID
+            user_id: 用户 ID（已登录用户），用于确定性的分桶
+            session_id: 会话 ID（未登录用户），用于确定性的分桶
+
+        Returns:
+            分配的实验分组，或 None
+
+        分桶策略：
+        - 优先使用 user_id 做确定性哈希分桶
+        - 其次使用 session_id
+        - 两者都无时，使用固定 key "anonymous" 保证同批次匿名用户在同一分组
+        """
         if experiment_id not in self._experiments:
             return None
 
@@ -245,9 +276,7 @@ class DeploymentABTestManager:
         if experiment.status != ExperimentStatus.RUNNING:
             return None
 
-        identifier = user_id or session_id
-        if not identifier:
-            return experiment.groups[0] if experiment.groups else None
+        identifier = user_id or session_id or "anonymous"
 
         cache_key = f"{experiment_id}:{identifier}"
         if cache_key in self._user_assignments:
@@ -376,6 +405,11 @@ class DeploymentABTestManager:
         if not control_stats.get("sample_size_met"):
             return {"is_significant": False, "confidence_level": 0, "p_value": 1.0}
 
+        primary_metric = experiment.config.primary_metric
+        # ctr/conversion_rate 以百分比存储（如 2.5 表示 2.5%），Z 检验需归一化到 [0,1]
+        proportion_metrics = {"ctr", "conversion_rate"}
+        is_proportion = primary_metric in proportion_metrics
+
         improvements = []
         for group in experiment.groups:
             if group.group_id == control_group.group_id:
@@ -385,7 +419,6 @@ class DeploymentABTestManager:
             if not group_stat.get("sample_size_met"):
                 continue
 
-            primary_metric = experiment.config.primary_metric
             control_value = control_stats.get(primary_metric, 0)
             group_value = group_stat.get(primary_metric, 0)
 
@@ -394,20 +427,30 @@ class DeploymentABTestManager:
             else:
                 improvement = 0
 
+            # Z 检验使用归一化后的比例值
+            if is_proportion:
+                z_control = control_value / 100.0
+                z_group = group_value / 100.0
+            else:
+                z_control = control_value
+                z_group = group_value
+
             p_value = self._calculate_p_value(
                 control_stats.get("sample_count", 0),
                 group_stat.get("sample_count", 0),
-                control_value,
-                group_value,
+                z_control,
+                z_group,
             )
 
-            improvements.append({
-                "group_id": group.group_id,
-                "group_name": group.name,
-                "improvement_percent": round(improvement, 2),
-                "p_value": round(p_value, 4),
-                "is_significant": p_value < (1 - experiment.config.confidence_level),
-            })
+            improvements.append(
+                {
+                    "group_id": group.group_id,
+                    "group_name": group.name,
+                    "improvement_percent": round(improvement, 2),
+                    "p_value": round(p_value, 4),
+                    "is_significant": p_value < (1 - experiment.config.confidence_level),
+                }
+            )
 
         is_significant = any(imp["is_significant"] for imp in improvements)
         confidence_level = 50
@@ -493,6 +536,7 @@ class DeploymentABTestManager:
     def _generate_experiment_id(self, name: str) -> str:
         """生成实验ID"""
         import time
+
         hash_input = f"{name}{time.time()}"
         return hashlib.md5(hash_input.encode(), usedforsecurity=False).hexdigest()[:12]
 

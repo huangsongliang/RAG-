@@ -125,6 +125,7 @@ def setup_logger(
     rotation: str = "500 MB",
     retention: str = "7 days",
     format_string: Optional[str] = None,
+    enable_json_log: bool = False,
 ) -> None:
     """
     配置日志系统
@@ -135,6 +136,7 @@ def setup_logger(
         rotation: 日志轮转大小
         retention: 日志保留时间
         format_string: 自定义格式字符串
+        enable_json_log: 是否启用 JSON 结构化日志（生产环境推荐）
     """
     logger.remove()
 
@@ -179,6 +181,21 @@ def setup_logger(
             diagnose=True,
         )
 
+    # 生产环境：JSON 结构化日志（便于对接 Loki / ELK）
+    if enable_json_log:
+        json_log_path = LOG_DIR / (log_file.replace(".log", ".jsonl") if log_file else "app.jsonl")
+        logger.add(
+            json_log_path,
+            level=level,
+            format=json_formatter,
+            rotation=rotation,
+            retention=retention,
+            compression="zip",
+            backtrace=True,
+            diagnose=True,
+            serialize=False,
+        )
+
 
 def get_logger(name: Optional[str] = None) -> Any:
     """
@@ -195,8 +212,18 @@ def get_logger(name: Optional[str] = None) -> Any:
     return logger
 
 
-# 初始化默认日志配置
-setup_logger()
+# 初始化默认日志配置（延迟导入避免循环引用）
+def _init_logger():
+    """初始化日志系统，读取配置中的日志级别"""
+    try:
+        from backend.core.config import settings
+
+        setup_logger(level=settings.log_level, enable_json_log=settings.json_log_enabled)
+    except Exception:
+        setup_logger()
+
+
+_init_logger()
 
 # ==================== 请求追踪功能 ====================
 

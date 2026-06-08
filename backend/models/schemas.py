@@ -35,7 +35,7 @@ class ChatMessage(BaseModel):
         json_schema_extra={
             "example": {
                 "role": "user",
-                "content": "苏轼的《水调歌头》是在什么背景下创作的？",
+                "content": "企业级文档问答平台如何部署？",
                 "timestamp": "2024-01-15T10:30:00",
             }
         }
@@ -54,7 +54,7 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "message": "苏轼的《水调歌头》是在什么背景下创作的？",
+                "message": "企业级文档问答平台如何部署？",
                 "session_id": "user_123_session_456",
                 "stream": True,
                 "temperature": 0.7,
@@ -86,11 +86,11 @@ class ChatResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "answer": "《水调歌头·明月几时有》是苏轼于宋神宗熙宁九年...",
+                "answer": "平台支持Docker Compose单机部署和Kubernetes集群部署两种方式...",
                 "references": [
                     {
                         "content": "《水调歌头》创作背景...",
-                        "source": "苏轼诗词鉴赏.txt",
+                        "source": "平台部署指南.txt",
                         "score": 0.95,
                         "metadata": {"page": 1},
                     }
@@ -140,13 +140,17 @@ class HealthStatus(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """错误响应模型"""
+    """统一错误响应模型 — 所有 API 错误响应的标准格式"""
 
-    error: str = Field(..., description="错误类型")
-    message: str = Field(..., description="错误详情")
-    detail: Optional[str] = Field(default=None, description="详细错误信息（仅开发环境）")
-    timestamp: datetime = Field(default_factory=datetime.now, description="错误发生时间")
+    error: str = Field(..., description="错误码（如 LLM_TIMEOUT, VALIDATION_ERROR）")
+    message: str = Field(..., description="错误消息")
+    detail: Optional[str] = Field(default=None, description="详细错误信息（仅开发环境返回）")
+    error_id: Optional[str] = Field(default=None, description="错误追踪 ID，用于关联服务端日志")
     request_id: Optional[str] = Field(default=None, description="请求追踪 ID")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now().isoformat(),
+        description="错误发生时间 (ISO 8601)",
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -154,8 +158,9 @@ class ErrorResponse(BaseModel):
                 "error": "LLM_TIMEOUT",
                 "message": "LLM 调用超时",
                 "detail": "qwen-max 模型响应时间超过 60 秒",
-                "timestamp": "2024-01-15T10:30:05",
+                "error_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
                 "request_id": "req_abc123",
+                "timestamp": "2024-01-15T10:30:05",
             }
         }
     )
@@ -182,8 +187,8 @@ class Document(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "content": "苏轼（1037-1101），字子瞻，号东坡居士...",
-                "source": "苏轼生平简介.txt",
+                "content": "企业级智能文档问答平台基于RAG架构...",
+                "source": "平台介绍.txt",
                 "metadata": {
                     "category": "biography",
                     "author": "admin",
@@ -204,7 +209,7 @@ class EmbeddingRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "texts": ["苏轼是北宋著名的文学家", "《水调歌头》是苏轼的代表作"],
+                "texts": ["企业级文档问答平台是新一代智能知识管理解决方案", "系统集成了通义千问大语言模型"],
                 "model": "text_embedding_v2",
             }
         }

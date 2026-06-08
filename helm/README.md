@@ -1,6 +1,6 @@
-# 苏轼文化数字人问答系统 Helm Chart
+# 企业级智能文档问答平台 Helm Chart
 
-这是苏轼文化数字人问答系统的 Kubernetes Helm Chart，用于将应用部署到 Kubernetes 集群。
+这是企业级智能文档问答平台的 Kubernetes Helm Chart，用于将应用部署到 Kubernetes 集群。
 
 ## 🚀 快速开始
 

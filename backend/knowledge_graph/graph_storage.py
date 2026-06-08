@@ -1,4 +1,4 @@
-"""图谱存储模块 - Neo4j 连接器封装和图谱 CRUD 操作"""
+"""图谱存储模块 - Neo4j 连接器封装和图谱 CRUD 操作（含内存降级存储）"""
 
 from typing import Dict, List, Optional
 
@@ -33,6 +33,7 @@ class GraphStorage:
 
     封装 Neo4j 连接器，提供节点和边的 CRUD 操作，
     支持批量操作和事务管理。
+    当 Neo4j 不可用时，自动降级为内存存储（mock 模式）。
     """
 
     def __init__(self, uri: str = "bolt://localhost:7687", username: str = "neo4j", password: str = "password"):
@@ -47,6 +48,9 @@ class GraphStorage:
         self.username = username
         self.password = password
         self.driver = None
+        # 内存存储（mock 模式用）
+        self._mock_nodes: Dict[str, Node] = {}
+        self._mock_edges: List[Edge] = []
         self._connect()
 
     def _connect(self):
@@ -94,11 +98,17 @@ class GraphStorage:
             return None
 
     def _mock_create_node(self, node: Node) -> Optional[str]:
-        """模拟创建节点（无 Neo4j 时使用）"""
+        """内存存储创建节点"""
         import uuid
 
         node_id = str(uuid.uuid4())
-        logger.info(f"模拟创建节点: {node_id}")
+        node.id = node_id
+        self._mock_nodes[node_id] = Node(
+            id=node_id,
+            label=node.label,
+            properties=node.properties,
+        )
+        logger.debug(f"内存存储创建节点: {node_id} [{node.label}] {node.properties.get('text', '')}")
         return node_id
 
     def create_nodes_batch(self, nodes: List[Node]) -> List[Optional[str]]:
@@ -140,12 +150,15 @@ class GraphStorage:
 
         try:
             with self.driver.session() as session:
-                query = """
+                query = (
+                    """
                 MATCH (source), (target)
                 WHERE id(source) = $source_id AND id(target) = $target_id
                 CREATE (source)-[r:%s $props]->(target)
                 RETURN r
-                """ % edge.relation_type
+                """
+                    % edge.relation_type
+                )
 
                 result = session.run(
                     query,
@@ -161,8 +174,20 @@ class GraphStorage:
             return False
 
     def _mock_create_edge(self, edge: Edge) -> bool:
-        """模拟创建边（无 Neo4j 时使用）"""
-        logger.info(f"模拟创建边: {edge.relation_type}")
+        """内存存储创建边"""
+        # 检查源/目标节点是否存在
+        if edge.source_id not in self._mock_nodes or edge.target_id not in self._mock_nodes:
+            logger.warning(f"边的端点不存在: {edge.source_id} -> {edge.target_id}")
+            return False
+        self._mock_edges.append(
+            Edge(
+                source_id=edge.source_id,
+                target_id=edge.target_id,
+                relation_type=edge.relation_type,
+                properties=edge.properties,
+            )
+        )
+        logger.debug(f"内存存储创建边: {edge.relation_type}")
         return True
 
     def create_edges_batch(self, edges: List[Edge]) -> List[bool]:
@@ -209,8 +234,8 @@ class GraphStorage:
             return None
 
     def _mock_get_node(self, node_id: str) -> Optional[Node]:
-        """模拟获取节点"""
-        return Node(id=node_id, label="MockNode", properties={"name": "Mock"})
+        """内存存储获取节点"""
+        return self._mock_nodes.get(node_id)
 
     def update_node(self, node_id: str, properties: Dict[str, str]) -> bool:
         """更新节点属性
@@ -223,8 +248,10 @@ class GraphStorage:
             是否成功
         """
         if not self.driver:
-            logger.info(f"模拟更新节点: {node_id}")
-            return True
+            if node_id in self._mock_nodes:
+                self._mock_nodes[node_id].properties.update(properties)
+                return True
+            return False
 
         try:
             with self.driver.session() as session:
@@ -246,8 +273,12 @@ class GraphStorage:
             是否成功
         """
         if not self.driver:
-            logger.info(f"模拟删除节点: {node_id}")
-            return True
+            if node_id in self._mock_nodes:
+                del self._mock_nodes[node_id]
+                # 级联删除相关边
+                self._mock_edges = [e for e in self._mock_edges if e.source_id != node_id and e.target_id != node_id]
+                return True
+            return False
 
         try:
             with self.driver.session() as session:
@@ -271,16 +302,24 @@ class GraphStorage:
             是否成功
         """
         if not self.driver:
-            logger.info(f"模拟删除边: {relation_type}")
-            return True
+            before = len(self._mock_edges)
+            self._mock_edges = [
+                e
+                for e in self._mock_edges
+                if not (e.source_id == source_id and e.target_id == target_id and e.relation_type == relation_type)
+            ]
+            return len(self._mock_edges) < before
 
         try:
             with self.driver.session() as session:
-                query = """
+                query = (
+                    """
                 MATCH (source)-[r:%s]->(target)
                 WHERE id(source) = $source_id AND id(target) = $target_id
                 DELETE r
-                """ % relation_type
+                """
+                    % relation_type
+                )
 
                 session.run(query, source_id=int(source_id), target_id=int(target_id))
                 logger.info(f"删除边成功: {relation_type}")
@@ -300,7 +339,7 @@ class GraphStorage:
             节点列表
         """
         if not self.driver:
-            return []
+            return [n for n in list(self._mock_nodes.values())[:limit] if n.label == label]
 
         try:
             with self.driver.session() as session:
@@ -309,9 +348,7 @@ class GraphStorage:
 
                 nodes = []
                 for record in result:
-                    nodes.append(
-                        Node(id=str(record["node_id"]), label=label, properties=record["props"])
-                    )
+                    nodes.append(Node(id=str(record["node_id"]), label=label, properties=record["props"]))
 
                 return nodes
         except Exception as e:
@@ -330,7 +367,11 @@ class GraphStorage:
             节点列表
         """
         if not self.driver:
-            return []
+            return [
+                n
+                for n in self._mock_nodes.values()
+                if n.label == label and n.properties.get(property_key) == property_value
+            ]
 
         try:
             with self.driver.session() as session:
@@ -343,9 +384,7 @@ class GraphStorage:
 
                 nodes = []
                 for record in result:
-                    nodes.append(
-                        Node(id=str(record["node_id"]), label=label, properties=record["props"])
-                    )
+                    nodes.append(Node(id=str(record["node_id"]), label=label, properties=record["props"]))
 
                 return nodes
         except Exception as e:
@@ -359,7 +398,18 @@ class GraphStorage:
             统计信息字典
         """
         if not self.driver:
-            return {"nodes": 0, "edges": 0}
+            entity_types: Dict[str, int] = {}
+            for n in self._mock_nodes.values():
+                entity_types[n.label] = entity_types.get(n.label, 0) + 1
+            relation_types: Dict[str, int] = {}
+            for e in self._mock_edges:
+                relation_types[e.relation_type] = relation_types.get(e.relation_type, 0) + 1
+            return {
+                "nodes": len(self._mock_nodes),
+                "edges": len(self._mock_edges),
+                "entity_types": entity_types,
+                "relation_types": relation_types,
+            }
 
         try:
             with self.driver.session() as session:
@@ -381,7 +431,9 @@ class GraphStorage:
             是否成功
         """
         if not self.driver:
-            logger.info("模拟清空图谱")
+            self._mock_nodes.clear()
+            self._mock_edges.clear()
+            logger.info("内存存储图谱已清空")
             return True
 
         try:

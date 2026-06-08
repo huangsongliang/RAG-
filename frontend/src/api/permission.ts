@@ -78,6 +78,13 @@ export const permissionApi = {
   roleDetail: (roleId: string) =>
     get<{ role_id: string; permissions: string[] }>(`/api/permissions/roles/${roleId}`),
 
+  /** 删除角色 */
+  deleteRole: (roleId: string) =>
+    fetch(`/api/permissions/roles/${roleId}`, { method: 'DELETE' }).then(res => res.json()) as Promise<{
+      status: string
+      message: string
+    }>,
+
   /** 分配角色给用户 */
   assignRole: (data: { user_id: string; role_id: string }) =>
     post<{ status: string; message: string }>('/api/permissions/roles/assign', data),

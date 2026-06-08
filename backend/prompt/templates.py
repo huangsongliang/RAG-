@@ -99,6 +99,28 @@ default_prompts.register(
     variables=["question"],
 )
 
+# 多模态问答提示词
+default_prompts.register(
+    name="multimodal_qa",
+    template="""你是一个智能助手，擅长理解图片内容并结合文本资料回答用户的问题。
+
+【图片描述】
+{context}
+
+【问题】
+{question}
+
+【回答要求】
+1. 结合图片描述中的信息回答问题
+2. 如果图片描述中有相关信息，优先基于图片内容回答
+3. 用简洁、清晰、易懂的语言回答
+4. 保持回答的准确性和专业性
+
+【回答】
+""",
+    variables=["context", "question"],
+)
+
 # 多轮对话提示词 - 正常助手风格
 default_prompts.register(
     name="multi_turn",

@@ -55,7 +55,7 @@ def require_permission(
                 )
 
             perm_manager = get_permission_manager()
-            has_permission = perm_manager.check_permission(
+            has_permission = await perm_manager.check_permission(
                 user_id=user_id,
                 resource_type=resource_type,
                 resource_id=str(resource_id),
@@ -63,7 +63,13 @@ def require_permission(
             )
 
             if not has_permission:
-                logger.warning(f"权限不足: user={user_id}, resource={resource_type}:{resource_id}, action={action}")
+                logger.warning(
+                    "权限不足: user=%s, resource=%s:%s, action=%s",
+                    user_id,
+                    resource_type,
+                    resource_id,
+                    action,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="权限不足",
@@ -116,7 +122,7 @@ def require_any_permission(
             perm_manager = get_permission_manager()
 
             for action in actions or [PermissionAction.READ]:
-                has_permission = perm_manager.check_permission(
+                has_permission = await perm_manager.check_permission(
                     user_id=user_id,
                     resource_type=resource_type,
                     resource_id=str(resource_id),
@@ -214,14 +220,14 @@ class PermissionMiddleware:
         await self.app(scope, receive, send)
 
 
-def check_document_permission(
+async def check_document_permission(
     user_id: str,
     document_id: str,
     action: PermissionAction = PermissionAction.READ,
 ) -> bool:
     """便捷函数：检查文档权限"""
     perm_manager = get_permission_manager()
-    return perm_manager.check_permission(
+    return await perm_manager.check_permission(
         user_id=user_id,
         resource_type=PermissionResource.DOCUMENT,
         resource_id=document_id,
@@ -229,14 +235,14 @@ def check_document_permission(
     )
 
 
-def check_folder_permission(
+async def check_folder_permission(
     user_id: str,
     folder_id: str,
     action: PermissionAction = PermissionAction.READ,
 ) -> bool:
     """便捷函数：检查文件夹权限"""
     perm_manager = get_permission_manager()
-    return perm_manager.check_permission(
+    return await perm_manager.check_permission(
         user_id=user_id,
         resource_type=PermissionResource.FOLDER,
         resource_id=folder_id,
@@ -244,7 +250,7 @@ def check_folder_permission(
     )
 
 
-def grant_document_permission(
+async def grant_document_permission(
     user_id: str,
     document_id: str,
     action: PermissionAction,
@@ -252,7 +258,7 @@ def grant_document_permission(
 ) -> bool:
     """便捷函数：授予文档权限"""
     perm_manager = get_permission_manager()
-    return perm_manager.grant_permission(
+    return await perm_manager.grant_permission(
         user_id=user_id,
         resource_type=PermissionResource.DOCUMENT,
         resource_id=document_id,
@@ -261,14 +267,14 @@ def grant_document_permission(
     )
 
 
-def revoke_document_permission(
+async def revoke_document_permission(
     user_id: str,
     document_id: str,
     action: PermissionAction,
 ) -> bool:
     """便捷函数：撤销文档权限"""
     perm_manager = get_permission_manager()
-    return perm_manager.revoke_permission(
+    return await perm_manager.revoke_permission(
         user_id=user_id,
         resource_type=PermissionResource.DOCUMENT,
         resource_id=document_id,
@@ -508,7 +514,7 @@ class RBACMiddleware:
         # 检查细粒度权限
         permission_rule = self._match_permission_rule(path, method)
         if permission_rule:
-            if not self._check_resource_permission(user_id, permission_rule):
+            if not await self._check_resource_permission(user_id, permission_rule):
                 await self._send_error_response(send, 403, "权限不足")
                 return
 
@@ -551,7 +557,7 @@ class RBACMiddleware:
                 return entry
         return None
 
-    def _check_resource_permission(self, user_id: str, rule: dict) -> bool:
+    async def _check_resource_permission(self, user_id: str, rule: dict) -> bool:
         """检查资源权限"""
         if not user_id:
             return False
@@ -566,7 +572,7 @@ class RBACMiddleware:
         path = rule.get("path", "")
         resource_id = self._extract_resource_id(path)
 
-        return self.perm_manager.check_permission(
+        return await self.perm_manager.check_permission(
             user_id=user_id,
             resource_type=resource_type,
             resource_id=resource_id,

@@ -25,6 +25,11 @@ class TestRelation:
         assert rel.context == "张三住在北京"
 
 
+def _make_person_entity(name: str) -> Entity:
+    """快捷创建 PERSON 类型实体"""
+    return Entity(text=name, label="PERSON", start=0, end=len(name), confidence=0.95)
+
+
 class TestRelationExtractor:
     """RelationExtractor 测试"""
 
@@ -38,6 +43,100 @@ class TestRelationExtractor:
         extractor = RelationExtractor()
         assert "工作于" in extractor.rule_patterns
         assert "位于" in extractor.rule_patterns
+
+    # ---------- 亲属关系：规则抽取测试 ----------
+
+    def test_kinship_x_shi_y_de_baba(self):
+        """X是Y的爸爸 → 亲属关系"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张伟"), _make_person_entity("小明")]
+        text = "张伟是小明的爸爸"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+        assert {relations[0].source, relations[0].target} == {"张伟", "小明"}
+
+    def test_kinship_x_de_baba_shi_y(self):
+        """X的爸爸是Y → 亲属关系"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("小明"), _make_person_entity("张伟")]
+        text = "小明的爸爸是张伟"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+        assert {relations[0].source, relations[0].target} == {"小明", "张伟"}
+
+    def test_kinship_x_he_y_shi_fuzi(self):
+        """X和Y是父子 → 亲属关系"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张伟"), _make_person_entity("小明")]
+        text = "张伟和小明是父子"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+
+    def test_kinship_x_he_y_shi_fuqi(self):
+        """X和Y是夫妻 → 亲属关系"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张伟"), _make_person_entity("李丽")]
+        text = "张伟和李丽是夫妻"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+
+    def test_kinship_x_shi_y_de_yeye(self):
+        """X是Y的爷爷 → 亲属关系（爷孙关系）"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张爷爷"), _make_person_entity("小张")]
+        text = "张爷爷是小张的爷爷"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+
+    def test_kinship_x_shi_y_de_yuefu(self):
+        """X是Y的岳父 → 亲属关系（姻亲关系）"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("老王"), _make_person_entity("小王")]
+        text = "老王是小王的岳父"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+
+    def test_kinship_x_shi_y_de_tangxiong(self):
+        """X是Y的堂兄 → 亲属关系（堂表亲）"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张大明"), _make_person_entity("张小明")]
+        text = "张大明是张小明的堂兄"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+
+    def test_kinship_x_shi_y_de_qinshu(self):
+        """X是Y的亲属 → 亲属关系（泛指）"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张三"), _make_person_entity("李四")]
+        text = "张三是李四的亲属"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) >= 1
+        assert relations[0].relation_type == "亲属关系"
+
+    def test_kinship_no_entity_no_match(self):
+        """没有 PERSON 实体时不应匹配亲属关系"""
+        extractor = RelationExtractor()
+        entities: list[Entity] = []  # type: ignore[var-annotated]
+        text = "小明的爸爸是张伟"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        assert len(relations) == 0
+
+    def test_kinship_not_confused_with_gongtong_texing(self):
+        """亲属关系不应被误识别为共同特征"""
+        extractor = RelationExtractor()
+        entities = [_make_person_entity("张伟"), _make_person_entity("小明")]
+        text = "张伟和小明是父子"
+        relations = extractor.extract_relations_with_rules(text, entities)
+        # 必须是亲属关系，不能是共同特征
+        kinship = [r for r in relations if r.relation_type == "亲属关系"]
+        assert len(kinship) >= 1
 
 
 class TestEntity:

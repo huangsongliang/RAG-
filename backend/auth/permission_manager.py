@@ -52,7 +52,7 @@ def require_permission(
                 raise HTTPException(status_code=400, detail=f"缺少参数: {resource_id_param}")
 
             perm_manager = get_permission_manager()
-            has_permission = perm_manager.check_permission(
+            has_permission = await perm_manager.check_permission(
                 user_id=str(user_id),
                 resource_type=resource_type,
                 resource_id=str(resource_id),
@@ -60,7 +60,10 @@ def require_permission(
             )
 
             if not has_permission:
-                raise HTTPException(status_code=403, detail=f"权限不足: 需要 {resource_type.value}:{action.value} 权限")
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"权限不足: 需要 {resource_type.value}:{action.value} 权限",
+                )
 
             return await func(*args, **kwargs)
 
@@ -97,7 +100,7 @@ class PermissionManager:
     def __init__(self):
         self.cache = {}
 
-    def check_permission(
+    async def check_permission(
         self,
         user_id: str,
         resource_type: PermissionResource,
@@ -110,28 +113,28 @@ class PermissionManager:
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        user_roles = self._get_user_roles(user_id)
+        user_roles = await self._get_user_roles(user_id)
         if not user_roles:
             return False
 
         for role in user_roles:
-            if self._role_has_permission(role, resource_type, action):
+            if await self._role_has_permission(role, resource_type, action):
                 self.cache[cache_key] = True
                 return True
 
-        if self._check_resource_acl(user_id, resource_type, resource_id, action):
+        if await self._check_resource_acl(user_id, resource_type, resource_id, action):
             self.cache[cache_key] = True
             return True
 
         if resource_type == PermissionResource.DOCUMENT:
-            if self._check_folder_inheritance(user_id, resource_id, action):
+            if await self._check_folder_inheritance(user_id, resource_id, action):
                 self.cache[cache_key] = True
                 return True
 
         self.cache[cache_key] = False
         return False
 
-    def _check_folder_inheritance(
+    async def _check_folder_inheritance(
         self,
         user_id: str,
         document_id: str,
@@ -139,7 +142,7 @@ class PermissionManager:
     ) -> bool:
         """检查文件夹继承权限"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT f.parent_folder_id
                 FROM documents d
@@ -155,13 +158,13 @@ class PermissionManager:
 
             folder_id = folder_id[0]
 
-            return self._check_folder_acl_recursive(user_id, folder_id, action)
+            return await self._check_folder_acl_recursive(user_id, folder_id, action)
 
         except Exception as e:
             logger.error(f"检查文件夹继承权限失败: {str(e)}")
             return False
 
-    def _check_folder_acl_recursive(
+    async def _check_folder_acl_recursive(
         self,
         user_id: str,
         folder_id: str,
@@ -177,11 +180,11 @@ class PermissionManager:
 
         visited.add(folder_id)
 
-        if self._check_resource_acl(user_id, PermissionResource.FOLDER, folder_id, action):
+        if await self._check_resource_acl(user_id, PermissionResource.FOLDER, folder_id, action):
             return True
 
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT parent_folder_id
                 FROM folders
@@ -192,17 +195,17 @@ class PermissionManager:
 
             parent_id = result.fetchone()
             if parent_id and parent_id[0]:
-                return self._check_folder_acl_recursive(user_id, parent_id[0], action, visited)
+                return await self._check_folder_acl_recursive(user_id, parent_id[0], action, visited)
 
         except Exception as e:
             logger.error(f"递归检查文件夹权限失败: {str(e)}")
 
         return False
 
-    def _get_user_roles(self, user_id: str) -> List[str]:
+    async def _get_user_roles(self, user_id: str) -> List[str]:
         """获取用户角色"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT role_id FROM user_roles
                 WHERE user_id = %s
@@ -214,10 +217,15 @@ class PermissionManager:
             logger.error(f"获取用户角色失败: {str(e)}")
             return []
 
-    def _role_has_permission(self, role_id: str, resource_type: PermissionResource, action: PermissionAction) -> bool:
+    async def _role_has_permission(
+        self,
+        role_id: str,
+        resource_type: PermissionResource,
+        action: PermissionAction,
+    ) -> bool:
         """检查角色是否有权限"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT 1 FROM role_permissions rp
                 JOIN permissions p ON rp.permission_id = p.id
@@ -232,12 +240,16 @@ class PermissionManager:
             logger.error(f"检查角色权限失败: {str(e)}")
             return False
 
-    def _check_resource_acl(
-        self, user_id: str, resource_type: PermissionResource, resource_id: str, action: PermissionAction
+    async def _check_resource_acl(
+        self,
+        user_id: str,
+        resource_type: PermissionResource,
+        resource_id: str,
+        action: PermissionAction,
     ) -> bool:
         """检查资源 ACL"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT 1 FROM resource_acl
                 WHERE resource_type = %s
@@ -252,7 +264,7 @@ class PermissionManager:
             logger.error(f"检查资源 ACL 失败: {str(e)}")
             return False
 
-    def grant_permission(
+    async def grant_permission(
         self,
         user_id: str,
         resource_type: PermissionResource,
@@ -262,9 +274,10 @@ class PermissionManager:
     ) -> bool:
         """授予权限"""
         try:
-            db.execute(
+            await db.execute(
                 """
-                INSERT INTO resource_acl (id, user_id, resource_type, resource_id, action, granted_by, created_at)
+                INSERT INTO resource_acl (id, user_id, resource_type, resource_id,
+                                          action, granted_by, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE granted_by = %s, created_at = %s
                 """,
@@ -280,18 +293,22 @@ class PermissionManager:
                     datetime.now(),
                 ),
             )
-            db.commit()
 
             self._clear_cache(user_id)
-            logger.info(f"权限授予成功: user={user_id}, resource={resource_type}:{resource_id}, action={action}")
+            logger.info(
+                "权限授予成功: user=%s, resource=%s:%s, action=%s",
+                user_id,
+                resource_type,
+                resource_id,
+                action,
+            )
             return True
 
         except Exception as e:
             logger.error(f"授予权限失败: {str(e)}")
-            db.rollback()
             return False
 
-    def revoke_permission(
+    async def revoke_permission(
         self,
         user_id: str,
         resource_type: PermissionResource,
@@ -300,7 +317,7 @@ class PermissionManager:
     ) -> bool:
         """撤销权限"""
         try:
-            db.execute(
+            await db.execute(
                 """
                 DELETE FROM resource_acl
                 WHERE user_id = %s
@@ -310,15 +327,18 @@ class PermissionManager:
                 """,
                 (user_id, resource_type.value, resource_id, action.value),
             )
-            db.commit()
 
             self._clear_cache(user_id)
-            logger.info(f"权限撤销成功: user={user_id}, resource={resource_type}:{resource_id}")
+            logger.info(
+                "权限撤销成功: user=%s, resource=%s:%s",
+                user_id,
+                resource_type,
+                resource_id,
+            )
             return True
 
         except Exception as e:
             logger.error(f"撤销权限失败: {str(e)}")
-            db.rollback()
             return False
 
     def _clear_cache(self, user_id: str):
@@ -327,12 +347,12 @@ class PermissionManager:
         for key in keys_to_remove:
             del self.cache[key]
 
-    def get_user_permissions(self, user_id: str) -> List[Dict[str, Any]]:
+    async def get_user_permissions(self, user_id: str) -> List[Dict[str, Any]]:
         """获取用户所有权限"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
-                SELECT DISTINCT p.resource_type, p.action
+                SELECT p.resource_type, p.action, '' as resource_id
                 FROM user_roles ur
                 JOIN role_permissions rp ON ur.role_id = rp.role_id
                 JOIN permissions p ON rp.permission_id = p.id
@@ -340,7 +360,7 @@ class PermissionManager:
 
                 UNION
 
-                SELECT racl.resource_type, racl.action
+                SELECT racl.resource_type, racl.action, racl.resource_id
                 FROM resource_acl racl
                 WHERE racl.user_id = %s
                 """,
@@ -353,6 +373,7 @@ class PermissionManager:
                     {
                         "resource_type": row[0],
                         "action": row[1],
+                        "resource_id": row[2],
                     }
                 )
 
@@ -362,10 +383,14 @@ class PermissionManager:
             logger.error(f"获取用户权限失败: {str(e)}")
             return []
 
-    def get_resource_acl(self, resource_type: PermissionResource, resource_id: str) -> List[Dict[str, Any]]:
+    async def get_resource_acl(
+        self,
+        resource_type: PermissionResource,
+        resource_id: str,
+    ) -> List[Dict[str, Any]]:
         """获取资源 ACL"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT racl.user_id, racl.action, racl.granted_by, racl.created_at
                 FROM resource_acl racl
@@ -392,44 +417,14 @@ class PermissionManager:
             logger.error(f"获取资源 ACL 失败: {str(e)}")
             return []
 
-    def create_role(self, role_name: str, description: str, permissions: List[Dict[str, str]]) -> Optional[str]:
-        """创建角色"""
-        try:
-            role_id = str(uuid4())
-
-            db.execute(
-                """
-                INSERT INTO roles (id, name, description, created_at)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (role_id, role_name, description, datetime.now()),
-            )
-
-            for perm in permissions:
-                perm_id = self._get_or_create_permission(perm["resource_type"], perm["action"])
-
-                if perm_id:
-                    db.execute(
-                        """
-                        INSERT INTO role_permissions (role_id, permission_id)
-                        VALUES (%s, %s)
-                        """,
-                        (role_id, perm_id),
-                    )
-
-            db.commit()
-            logger.info(f"角色创建成功: {role_name} (id={role_id})")
-            return role_id
-
-        except Exception as e:
-            logger.error(f"创建角色失败: {str(e)}")
-            db.rollback()
-            return None
-
-    def _get_or_create_permission(self, resource_type: str, action: str) -> Optional[str]:
+    async def _get_or_create_permission(
+        self,
+        resource_type: str,
+        action: str,
+    ) -> Optional[str]:
         """获取或创建权限"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT id FROM permissions
                 WHERE resource_type = %s AND action = %s
@@ -442,14 +437,13 @@ class PermissionManager:
                 return row[0]
 
             perm_id = str(uuid4())
-            db.execute(
+            await db.execute(
                 """
                 INSERT INTO permissions (id, resource_type, action, description)
                 VALUES (%s, %s, %s, %s)
                 """,
                 (perm_id, resource_type, action, f"{action} {resource_type}"),
             )
-            db.commit()
 
             return perm_id
 
@@ -457,18 +451,90 @@ class PermissionManager:
             logger.error(f"获取或创建权限失败: {str(e)}")
             return None
 
-    def assign_role_to_user(self, user_id: str, role_id: str, assigned_by: str) -> bool:
+    async def create_role(
+        self,
+        role_name: str,
+        description: str,
+        permissions: List[Dict[str, str]],
+    ) -> Optional[str]:
+        """创建角色"""
+        try:
+            role_id = str(uuid4())
+
+            await db.execute(
+                """
+                INSERT INTO roles (id, name, description, created_at)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (role_id, role_name, description, datetime.now()),
+            )
+
+            for perm in permissions:
+                perm_id = await self._get_or_create_permission(perm["resource_type"], perm["action"])
+
+                if perm_id:
+                    await db.execute(
+                        """
+                        INSERT INTO role_permissions (role_id, permission_id)
+                        VALUES (%s, %s)
+                        """,
+                        (role_id, perm_id),
+                    )
+
+            logger.info(f"角色创建成功: {role_name} (id={role_id})")
+            return role_id
+
+        except Exception as e:
+            logger.error(f"创建角色失败: {str(e)}")
+            return None
+
+    async def delete_role(self, role_id: str) -> bool:
+        """删除角色"""
+        try:
+            # 先删除关联的 role_permissions 和 user_roles
+            await db.execute(
+                "DELETE FROM role_permissions WHERE role_id = %s",
+                (role_id,),
+            )
+            await db.execute(
+                "DELETE FROM user_roles WHERE role_id = %s",
+                (role_id,),
+            )
+            await db.execute(
+                "DELETE FROM roles WHERE id = %s",
+                (role_id,),
+            )
+
+            logger.info(f"角色删除成功: role_id={role_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"删除角色失败: {str(e)}")
+            return False
+
+    async def assign_role_to_user(
+        self,
+        user_id: str,
+        role_id: str,
+        assigned_by: str,
+    ) -> bool:
         """为用户分配角色"""
         try:
-            db.execute(
+            await db.execute(
                 """
                 INSERT INTO user_roles (user_id, role_id, assigned_by, created_at)
                 VALUES (%s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE assigned_by = %s, created_at = %s
                 """,
-                (user_id, role_id, assigned_by, datetime.now(), assigned_by, datetime.now()),
+                (
+                    user_id,
+                    role_id,
+                    assigned_by,
+                    datetime.now(),
+                    assigned_by,
+                    datetime.now(),
+                ),
             )
-            db.commit()
 
             self._clear_cache(user_id)
             logger.info(f"角色分配成功: user={user_id}, role={role_id}")
@@ -476,20 +542,18 @@ class PermissionManager:
 
         except Exception as e:
             logger.error(f"分配角色失败: {str(e)}")
-            db.rollback()
             return False
 
-    def remove_role_from_user(self, user_id: str, role_id: str) -> bool:
+    async def remove_role_from_user(self, user_id: str, role_id: str) -> bool:
         """移除用户角色"""
         try:
-            db.execute(
+            await db.execute(
                 """
                 DELETE FROM user_roles
                 WHERE user_id = %s AND role_id = %s
                 """,
                 (user_id, role_id),
             )
-            db.commit()
 
             self._clear_cache(user_id)
             logger.info(f"角色移除成功: user={user_id}, role={role_id}")
@@ -497,13 +561,12 @@ class PermissionManager:
 
         except Exception as e:
             logger.error(f"移除角色失败: {str(e)}")
-            db.rollback()
             return False
 
-    def get_all_roles(self) -> List[Dict[str, Any]]:
+    async def get_all_roles(self) -> List[Dict[str, Any]]:
         """获取所有角色"""
         try:
-            result = db.execute("SELECT id, name, description, created_at FROM roles")
+            result = await db.execute("SELECT id, name, description, created_at FROM roles")
             roles = []
             for row in result.fetchall():
                 roles.append(
@@ -520,10 +583,10 @@ class PermissionManager:
             logger.error(f"获取角色列表失败: {str(e)}")
             return []
 
-    def get_role_permissions(self, role_id: str) -> List[Dict[str, Any]]:
+    async def get_role_permissions(self, role_id: str) -> List[Dict[str, Any]]:
         """获取角色权限"""
         try:
-            result = db.execute(
+            result = await db.execute(
                 """
                 SELECT p.id, p.resource_type, p.action, p.description
                 FROM permissions p

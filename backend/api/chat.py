@@ -3,14 +3,19 @@
 import json
 import time
 import traceback
+import warnings
+from datetime import datetime
 from typing import AsyncGenerator, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from backend.chain import get_rag_chain
+from backend.database.models import Conversation
+from backend.database.session import get_db_session
 from backend.memory import ConversationMemory
 from backend.retrieval import get_vector_store
 from backend.utils.logger import get_logger
@@ -52,15 +57,63 @@ class AddDocumentsRequest(BaseModel):
     documents: List[str] = Field(..., min_length=1, max_length=100, description="文档列表")
 
 
-def format_error_response(error_type: str, message: str, detail: Optional[str] = None) -> dict:
-    """格式化错误响应"""
+def format_error_response(
+    error_type: str, message: str, detail: Optional[str] = None, error_id: Optional[str] = None
+) -> dict:
+    """格式化统一错误响应（与 ErrorResponse Pydantic 模型对齐）"""
+    from backend.utils.logger import get_request_id
+
     return {
         "error": error_type,
         "message": message,
         "detail": detail,
+        "error_id": error_id,
+        "request_id": get_request_id(),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "request_id": str(uuid4()),
     }
+
+
+def _get_user_id(request: Request) -> Optional[int]:
+    """从 JWT token 直接解析用户 ID（AuthMiddleware 未注册，需自行解码）"""
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.startswith("Bearer "):
+        return None
+    token = auth[7:]
+    try:
+        from jose import jwt
+
+        from backend.core.config import settings
+
+        payload = jwt.decode(token, settings.secret_key, algorithms=["HS256"])
+        uid = payload.get("sub")
+        if uid:
+            return int(uid) if isinstance(uid, int) or uid.isdigit() else None
+    except Exception:
+        return None
+    return None
+
+
+async def _save_conversation(session_id: str, user_id: Optional[int], title: str):
+    """将会话信息持久化到数据库"""
+    if not user_id:
+        return
+    try:
+        async with get_db_session() as db:
+            existing = await db.execute(select(Conversation).where(Conversation.session_id == session_id))
+            conv = existing.scalar_one_or_none()
+            if conv:
+                conv.title = title
+                conv.updated_at = datetime.now()
+            else:
+                conv = Conversation(
+                    user_id=user_id,
+                    session_id=session_id,
+                    title=title,
+                )
+                db.add(conv)
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"保存会话到数据库失败: {e}")
 
 
 @router.post("/docs/add")
@@ -92,7 +145,7 @@ async def add_documents(request: AddDocumentsRequest):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(request: ChatRequest, req: Request) -> ChatResponse:
     """聊天接口 - 调用 RAG 链处理（异步优化）"""
 
     start_time = time.time()
@@ -133,6 +186,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
         await memory.save_message("user", request.message)
         await memory.save_message("assistant", result["answer"])
 
+        # 持久化会话到数据库
+        user_id = _get_user_id(req)
+        title = request.message[:50] + ("..." if len(request.message) > 50 else "")
+        await _save_conversation(session_id, user_id, title)
+
         # 提取来源信息
         sources = []
         for ref in result["references"]:
@@ -162,23 +220,35 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 
 async def generate_stream_response(
-    session_id: str, message: str, use_rag: bool = True, top_k: int = 3
+    session_id: str,
+    message: str,
+    user_id: Optional[int] = None,
+    use_rag: bool = True,
+    top_k: int = 3,
 ) -> AsyncGenerator[str, None]:
     """生成流式响应"""
-    async for chunk in _stream_response_core(session_id, message, use_rag, top_k):
+    async for chunk in _stream_response_core(
+        session_id,
+        message,
+        use_rag,
+        top_k,
+        user_id,
+    ):
         yield chunk
 
 
 @router.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, req: Request):
     """流式聊天接口 - SSE"""
 
     session_id = request.session_id or str(uuid4())
+    user_id = _get_user_id(req)
 
     return StreamingResponse(
         generate_stream_response(
             session_id=session_id,
             message=request.message,
+            user_id=user_id,
             use_rag=request.use_rag,
             top_k=request.top_k,
         ),
@@ -226,9 +296,67 @@ async def reset_performance_stats():
     return {"status": "success", "message": "性能统计已重置"}
 
 
+# ==================== 会话历史 API ====================
+
+
+@router.get("/chat/sessions")
+async def list_sessions(request: Request):
+    """获取当前用户的会话列表（需登录）"""
+    user_id = _get_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="请先登录")
+
+    try:
+        async with get_db_session() as db:
+            result = await db.execute(
+                select(Conversation).where(Conversation.user_id == user_id).order_by(Conversation.updated_at.desc())
+            )
+            convs = result.scalars().all()
+            return {
+                "sessions": [
+                    {
+                        "id": c.session_id,
+                        "title": c.title or "新对话",
+                        "created_at": c.created_at.isoformat() if c.created_at else "",
+                        "updated_at": c.updated_at.isoformat() if c.updated_at else "",
+                    }
+                    for c in convs
+                ]
+            }
+    except Exception as e:
+        logger.error(f"获取会话列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/sessions/{session_id}/messages")
+async def get_session_messages(session_id: str):
+    """获取指定会话的消息历史（从 Redis 读取）"""
+    try:
+        memory = ConversationMemory(session_id)
+        messages = await memory.get_full_history()
+        return {
+            "session_id": session_id,
+            "messages": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "timestamp": m.timestamp.isoformat(),
+                }
+                for m in messages
+            ],
+        }
+    except Exception as e:
+        logger.error(f"获取会话消息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ==================== 异步流式 API ====================
 async def _stream_response_core(
-    session_id: str, message: str, use_rag: bool = True, top_k: int = 3
+    session_id: str,
+    message: str,
+    use_rag: bool = True,
+    top_k: int = 3,
+    user_id: Optional[int] = None,
 ) -> AsyncGenerator[str, None]:
     """流式响应核心逻辑（消除 generate_stream_response 和
     generate_async_stream_response 的代码重复）"""
@@ -253,6 +381,10 @@ async def _stream_response_core(
 
         # 保存用户消息到记忆
         await memory.save_message("user", message)
+
+        # 持久化会话到数据库
+        title = message[:50] + ("..." if len(message) > 50 else "")
+        await _save_conversation(session_id, user_id, title)
 
         # 获取 RAG 链
         rag_chain = get_rag_chain()
@@ -288,23 +420,35 @@ async def _stream_response_core(
 
 
 async def generate_async_stream_response(
-    session_id: str, message: str, use_rag: bool = True, top_k: int = 3
+    session_id: str,
+    message: str,
+    user_id: Optional[int] = None,
+    use_rag: bool = True,
+    top_k: int = 3,
 ) -> AsyncGenerator[str, None]:
     """生成异步流式响应（结合异步任务队列和SSE，与 generate_stream_response 共享核心逻辑）"""
-    async for chunk in _stream_response_core(session_id, message, use_rag, top_k):
+    async for chunk in _stream_response_core(
+        session_id,
+        message,
+        use_rag,
+        top_k,
+        user_id,
+    ):
         yield chunk
 
 
 @router.post("/chat/async/stream")
-async def chat_async_stream(request: ChatRequest):
+async def chat_async_stream(request: ChatRequest, req: Request):
     """异步流式聊天接口 - SSE 实时推送"""
 
     session_id = request.session_id or str(uuid4())
+    user_id = _get_user_id(req)
 
     return StreamingResponse(
         generate_async_stream_response(
             session_id=session_id,
             message=request.message,
+            user_id=user_id,
             use_rag=request.use_rag,
             top_k=request.top_k,
         ),
@@ -407,3 +551,84 @@ async def get_async_chat_result(task_id: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询任务失败: {str(e)}")
+
+
+# ==================== 兼容层（deprecated） ====================
+# 旧入口标记 deprecated，内部代理到统一引擎 /api/chat/send。
+# 计划在 6 个月后移除。迁移指南见 docs/MIGRATION_UNIFIED_CHAT.md
+
+
+@router.post("/chat/async/stream", deprecated=True)
+async def chat_async_stream_deprecated(request: ChatRequest, req: Request):
+    """[DEPRECATED] 旧版异步流式聊天 — 内部代理到 /api/chat/send"""
+    warnings.warn(
+        "此接口已废弃，请迁移到 POST /api/chat/send 统一入口。",
+        DeprecationWarning,
+    )
+
+    from backend.api.unified_chat import ChatSendRequest
+    from backend.api.unified_chat import _get_user_id as unified_get_user_id
+    from backend.api.unified_chat import _route_rag, _stream_with_heartbeat, event_to_json
+
+    session_id = request.session_id or str(uuid4())
+    user_id = unified_get_user_id(req)
+
+    async def generator():
+        async for event in _route_rag(
+            request.message,
+            session_id,
+            user_id,
+            request.use_rag,
+            request.top_k,
+        ):
+            yield event
+
+    return StreamingResponse(
+        _stream_with_heartbeat(generator()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Session-ID": session_id,
+            "X-Deprecated": "true",
+        },
+    )
+
+
+@router.post("/chat/stream", deprecated=True)
+async def chat_stream_deprecated(request: ChatRequest, req: Request):
+    """[DEPRECATED] 旧版流式聊天 — 内部代理到 /api/chat/send"""
+    warnings.warn(
+        "此接口已废弃，请迁移到 POST /api/chat/send 统一入口。",
+        DeprecationWarning,
+    )
+
+    from backend.api.unified_chat import ChatSendRequest
+    from backend.api.unified_chat import _get_user_id as unified_get_user_id
+    from backend.api.unified_chat import _route_rag, _stream_with_heartbeat, event_to_json
+
+    session_id = request.session_id or str(uuid4())
+    user_id = unified_get_user_id(req)
+
+    async def generator():
+        async for event in _route_rag(
+            request.message,
+            session_id,
+            user_id,
+            request.use_rag,
+            request.top_k,
+        ):
+            yield event
+
+    return StreamingResponse(
+        _stream_with_heartbeat(generator()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "X-Session-ID": session_id,
+            "X-Deprecated": "true",
+        },
+    )

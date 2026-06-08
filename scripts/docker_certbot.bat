@@ -56,7 +56,7 @@ if "%CHOICE%"=="1" (
     echo.
     set /p CONFIRM="是否继续? (y/n): "
     if /i not "%CONFIRM%"=="y" exit /b 0
-    
+
     REM 使用 standalone 模式获取证书
     docker run --rm -it ^
         -v "%ACME_DIR%:/acme.sh" ^
@@ -68,7 +68,7 @@ if "%CHOICE%"=="1" (
         --email %EMAIL% ^
         --standalone ^
         --force
-    
+
     if %errorlevel% neq 0 (
         echo [错误] 证书获取失败！
         pause
@@ -118,7 +118,7 @@ set ACME_KEY_PATH=%ACME_DIR%\ca\%DOMAIN%
 if exist "%ACME_CERT_PATH%" (
     copy /Y "%ACME_CERT_PATH%\fullchain.cer" "%CERT_DIR%\fullchain.pem"
     copy /Y "%ACME_CERT_PATH%\%DOMAIN%.key" "%CERT_DIR%\privkey.pem"
-    
+
     if %errorlevel% equ 0 (
         echo [成功] 证书已复制到 ssl 目录
     ) else (

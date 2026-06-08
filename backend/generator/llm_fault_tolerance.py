@@ -179,8 +179,13 @@ class LLMFallback:
     """LLM降级策略"""
 
     @staticmethod
-    def get_default_response(prompt: str) -> dict:
+    def get_default_response(prompt: str = "") -> dict:
         """获取默认响应（降级时使用）"""
+        return {"output": {"choices": [{"message": {"content": "抱歉，当前服务暂时不可用，请稍后重试。"}}]}}
+
+    @staticmethod
+    def get_default_messages_response(messages: list = None) -> dict:
+        """获取 Messages 模式的默认降级响应"""
         return {"output": {"choices": [{"message": {"content": "抱歉，当前服务暂时不可用，请稍后重试。"}}]}}
 
     @staticmethod
@@ -235,6 +240,27 @@ class SafeLLM:
 
             # 返回降级响应
             return LLMFallback.get_default_response(prompt)
+
+    async def invoke_messages(self, messages, **kwargs) -> Any:
+        """安全调用LLM（Messages 模式）- 带重试和熔断"""
+        if not await self._circuit_breaker.allow_request():
+            logger.warning("熔断器已打开，返回降级响应")
+            return LLMFallback.get_default_messages_response(messages)
+
+        try:
+
+            @self._retry
+            async def _safe_invoke():
+                return await self._llm.invoke_messages(messages, **kwargs)
+
+            result = await _safe_invoke()
+            await self._circuit_breaker.record_success()
+            return result
+
+        except Exception as e:
+            await self._circuit_breaker.record_failure()
+            logger.error(f"LLM Messages 调用失败（已熔断）: {str(e)}")
+            return LLMFallback.get_default_messages_response(messages)
 
     async def stream(self, prompt: str, **kwargs) -> Any:
         """安全流式调用LLM"""

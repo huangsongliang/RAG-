@@ -42,7 +42,52 @@
               <span v-else>智</span>
             </div>
             <div class="message-content">
-              <p class="message-text">{{ message.content }}</p>
+              <!-- Markdown 双轨渲染：流式纯文本 / 完成后富文本 -->
+              <div
+                v-if="message.role === 'assistant' && message.status === 'completed'"
+                class="message-text markdown-body"
+                v-html="renderMarkdown(message.content)"
+              ></div>
+              <p v-else class="message-text">{{ message.content }}</p>
+              <!-- 用户消息附件展示 -->
+              <div
+                v-if="message.role === 'user' && message.attachments && message.attachments.length > 0"
+                class="user-attachments"
+              >
+                <div
+                  v-for="(att, idx) in message.attachments"
+                  :key="idx"
+                  class="user-attachment-item"
+                >
+                  <span class="att-icon">{{ att.fileType?.startsWith('image/') ? '🖼️' : '📄' }}</span>
+                  <span class="att-name">{{ att.fileName }}</span>
+                </div>
+              </div>
+              <!-- RAG traceability: show source citations -->
+              <div
+                v-if="message.role === 'assistant' && message.references && message.references.length > 0"
+                class="source-citations"
+              >
+                <div class="citations-toggle" @click="toggleCitations(message.id)">
+                  <span class="citations-icon">[ref]</span>
+                  <span>参考来源 ({{ message.references.length }})</span>
+                  <span class="citations-arrow">{{ expandedCitations[message.id] ? 'v' : '>' }}</span>
+                </div>
+                <div v-if="expandedCitations[message.id]" class="citations-list">
+                  <div v-for="(ref, idx) in message.references" :key="idx" class="citation-item">
+                    <div class="citation-header">
+                      <span class="citation-index">[{{ idx + 1 }}]</span>
+                      <span class="citation-score">
+                        相似度 {{ ((1 - ref.distance) * 100).toFixed(0) }}%
+                      </span>
+                      <span v-if="ref.metadata && ref.metadata.source" class="citation-source">
+                        来源: {{ ref.metadata.source }}
+                      </span>
+                    </div>
+                    <p class="citation-snippet">{{ ref.content }}</p>
+                  </div>
+                </div>
+              </div>
               <div v-if="message.status && message.status !== 'completed'" class="message-status">
                 <span v-if="message.status === 'pending'" class="status-badge status-pending">排队中...</span>
                 <span v-else-if="message.status === 'processing'" class="status-badge status-processing">处理中...</span>
@@ -50,7 +95,13 @@
               </div>
               <div class="message-meta">
                 <span class="message-time">{{ formatTime(message.timestamp) }}</span>
+                <span v-if="message.route" class="route-tag">{{ routeLabel(message.route) }}</span>
               </div>
+              <!-- 工具调用折叠面板 — 取代旧的 tool-tag -->
+              <ToolCallPanel
+                v-if="message.toolCalls && message.toolCalls.length > 0"
+                :calls="message.toolCalls"
+              />
             </div>
           </div>
         </div>
@@ -61,25 +112,28 @@
             <span></span>
             <span></span>
           </div>
-          <span class="typing-text">正在思考...</span>
+          <span class="typing-text">{{ loadingText }}</span>
         </div>
       </div>
 
       <div class="input-area">
+        <!-- 文件附件栏 -->
+        <FileAttachmentBar ref="attachmentBarRef" @file-ids-change="onFileIdsChange" />
         <div class="input-wrapper">
           <textarea
             v-model="inputMessage"
             class="classic-input message-input"
-            placeholder="请输入您的问题..."
+            placeholder="请输入您的问题...（Shift+Enter 换行）"
             rows="2"
             @keydown.enter.exact.prevent="handleSend"
+            @keydown.escape="handleCancelRequest"
           ></textarea>
           <button
             class="send-btn"
-            :disabled="!inputMessage.trim() || store.isStreaming"
-            @click="handleSend"
+            :disabled="(!inputMessage.trim() && !store.isStreaming) || store.isStreaming"
+            @click="store.isStreaming ? handleCancelRequest() : handleSend()"
           >
-            <span>发送</span>
+            <span>{{ store.isStreaming ? '停止' : '发送' }}</span>
           </button>
         </div>
         <div class="input-actions">
@@ -102,12 +156,60 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useChatStore } from '@/stores/chat'
+import { useMarkdown } from '@/composables/useMarkdown'
+import ToolCallPanel from '@/components/ToolCallPanel.vue'
+import FileAttachmentBar from '@/components/FileAttachmentBar.vue'
+
+defineOptions({ name: 'ChatArea' })
 
 const store = useChatStore()
 const inputMessage = ref('')
 const messagesContainer = ref<HTMLElement | null>(null)
+const attachmentBarRef = ref<InstanceType<typeof FileAttachmentBar> | null>(null)
+const { render: renderMarkdown } = useMarkdown()
+
+// 当前已上传的文件 ID 列表
+const fileIds = ref<string[]>([])
+
+function onFileIdsChange(ids: string[]) {
+  fileIds.value = ids
+}
+
+// Source citation expand state
+const expandedCitations = ref<Record<string, boolean>>({})
+
+function toggleCitations(messageId: string) {
+  expandedCitations.value[messageId] = !expandedCitations.value[messageId]
+}
+
+// 动态 loading 文字：根据最新 assistant 消息的 loadingPhase 显示
+const loadingText = computed(() => {
+  const msgs = store.currentSession?.messages
+  if (!msgs || msgs.length === 0) return '正在思考...'
+  const last = msgs[msgs.length - 1]
+  if (last.role !== 'assistant') return '正在思考...'
+  const phase = last.loadingPhase
+  const phaseMap: Record<string, string> = {
+    thinking: '正在思考...',
+    searching: '正在检索知识库...',
+    analyzing: '正在分析...',
+    generating: '正在生成回答...',
+  }
+  return phaseMap[phase || ''] || '正在思考...'
+})
+
+// 路由标签文字
+function routeLabel(route: string | undefined): string {
+  const map: Record<string, string> = {
+    chat: '闲聊',
+    rag: '知识库',
+    agent: '智能代理',
+    multimodal: '多模态',
+  }
+  return map[route || ''] || ''
+}
 
 console.log('[ChatArea] Current session:', store.currentSession)
 console.log('[ChatArea] Current session ID:', store.currentSession?.id)
@@ -126,14 +228,25 @@ function handleSend() {
   inputMessage.value = ''
 
   console.log('[ChatArea] Sending message:', message)
-  console.log('[ChatArea] Current session before send:', store.currentSession?.id)
+  console.log('[ChatArea] File IDs:', fileIds.value)
 
-  // 默认使用异步模式
-  store.sendMessageAsync(message)
+  // 收集附件信息用于用户消息展示
+  const attachmentInfos = attachmentBarRef.value?.getFileInfos() || []
+
+  // 携带文件 ID 和附件信息发送
+  store.sendMessageAsync(message, fileIds.value, attachmentInfos)
+
+  // 发送后清空附件
+  attachmentBarRef.value?.clearAll()
+  fileIds.value = []
 
   nextTick(() => {
     scrollToBottom()
   })
+}
+
+function handleCancelRequest() {
+  store.cancelRequest()
 }
 
 function scrollToBottom() {
@@ -349,6 +462,37 @@ watch(() => {
   color: white;
 }
 
+/* 用户消息附件展示 */
+.user-attachments {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.user-attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+  max-width: 200px;
+}
+
+.att-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.att-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .message-meta {
   display: flex;
   justify-content: flex-end;
@@ -513,5 +657,239 @@ watch(() => {
 .mode-hint {
   font-size: 11px;
   color: var(--color-ink-faint);
+}
+
+/* Source Citations */
+.source-citations {
+  margin-top: 8px;
+  border-top: 1px solid rgba(139, 115, 85, 0.12);
+  padding-top: 8px;
+}
+
+.citations-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-accent);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 0;
+}
+
+.citations-toggle:hover {
+  color: var(--color-accent-light);
+}
+
+.citations-icon {
+  font-size: 13px;
+}
+
+.citations-arrow {
+  font-size: 10px;
+  margin-left: auto;
+}
+
+.citations-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.citation-item {
+  background: rgba(139, 115, 85, 0.05);
+  border: 1px solid rgba(139, 115, 85, 0.1);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.citation-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.citation-index {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.citation-score {
+  font-size: 11px;
+  color: #2196f3;
+  background: rgba(33, 150, 243, 0.08);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.citation-source {
+  font-size: 11px;
+  color: var(--color-ink-faint);
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+
+.citation-snippet {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-ink-light);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Route & Tool Tags */
+.route-tag {
+  font-size: 10px;
+  color: var(--color-accent);
+  background: rgba(139, 115, 85, 0.1);
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 8px;
+}
+
+.tool-tag {
+  font-size: 10px;
+  color: #795548;
+  background: rgba(121, 85, 72, 0.08);
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 6px;
+}
+
+/* ========== Markdown 富文本渲染样式 ========== */
+.markdown-body {
+  word-break: break-word;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--color-ink-black);
+}
+
+.markdown-body h1 { font-size: 20px; }
+.markdown-body h2 { font-size: 17px; border-bottom: 1px solid rgba(139, 115, 85, 0.15); padding-bottom: 4px; }
+.markdown-body h3 { font-size: 15px; }
+
+.markdown-body p {
+  margin: 6px 0;
+  line-height: 1.6;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+
+.markdown-body li {
+  margin: 2px 0;
+  line-height: 1.5;
+}
+
+.markdown-body blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--color-accent);
+  background: rgba(139, 115, 85, 0.05);
+  color: var(--color-ink-light);
+}
+
+.markdown-body a {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.markdown-body a:hover {
+  color: var(--color-accent-light);
+}
+
+/* 表格样式 */
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid rgba(139, 115, 85, 0.2);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: rgba(139, 115, 85, 0.08);
+  font-weight: 600;
+  color: var(--color-ink-black);
+}
+
+.markdown-body tr:nth-child(even) {
+  background: rgba(139, 115, 85, 0.03);
+}
+
+/* 代码块样式 */
+.markdown-body pre {
+  background: #1e1e1e;
+  border-radius: 6px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  margin: 8px 0;
+  line-height: 1.5;
+}
+
+.markdown-body code {
+  font-family: 'Fira Code', 'Source Code Pro', 'Consolas', monospace;
+  font-size: 13px;
+}
+
+.markdown-body pre code {
+  color: #d4d4d4;
+  background: none;
+  padding: 0;
+}
+
+.markdown-body p code,
+.markdown-body li code {
+  background: rgba(139, 115, 85, 0.1);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+  color: #c62828;
+}
+
+/* hr 分割线 */
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(139, 115, 85, 0.15);
+  margin: 16px 0;
+}
+
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+.markdown-body strong {
+  font-weight: 600;
+  color: var(--color-ink-black);
 }
 </style>

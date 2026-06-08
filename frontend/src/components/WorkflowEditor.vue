@@ -376,6 +376,25 @@ function onDragStart(e: DragEvent, type: NodeType) {
 async function handleSave() {
   if (!currentWorkflow.value) return
   const wf = currentWorkflow.value
+
+  // 自动补结束节点（后端验证要求至少一个）
+  const hasEnd = wf.nodes.some(n => n.type === 'end')
+  if (!hasEnd) {
+    const endNode: WorkflowNode = {
+      id: 'node_' + (++nodeCounter),
+      type: 'end' as NodeType,
+      name: '结束',
+      next_nodes: [],
+    }
+    wf.nodes.push(endNode)
+    // 把最后一个非 end 节点的 next_nodes 指向它
+    const lastNode = wf.nodes.filter(n => n.type !== 'end').slice(-1)[0]
+    if (lastNode) {
+      lastNode.next_nodes = [...lastNode.next_nodes, endNode.id]
+    }
+    saveLocalWorkflow()
+  }
+
   const def = {
     id: wf.id,
     name: wf.name,

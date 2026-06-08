@@ -7,6 +7,9 @@ import AuditLog from '../components/AuditLog.vue'
 import PermissionManager from '../components/PermissionManager.vue'
 import WorkflowEditor from '../components/WorkflowEditor.vue'
 import PluginMarket from '../components/PluginMarket.vue'
+import DataMigration from '../components/DataMigration.vue'
+import KnowledgeGraphPage from '../components/KnowledgeGraphPage.vue'
+import MultimodalPage from '../components/MultimodalPage.vue'
 import GithubCallback from '../components/GithubCallback.vue'
 import DemoPage from '../components/DemoPage.vue'
 import { useAuthStore } from '../stores/auth'
@@ -48,14 +51,32 @@ const routes = [
     component: WorkflowEditor,
     meta: { requiresAuth: true },
   },
-  {
-    path: '/plugins',
-    name: 'Plugins',
-    component: PluginMarket,
-    meta: { requiresAuth: true },
-  },
-  {
-    path: '/demo',
+    {
+      path: '/plugins',
+      name: 'Plugins',
+      component: PluginMarket,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/data-migration',
+      name: 'DataMigration',
+      component: DataMigration,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/knowledge-graph',
+      name: 'KnowledgeGraph',
+      component: KnowledgeGraphPage,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/multimodal',
+      name: 'Multimodal',
+      component: MultimodalPage,
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/demo',
     name: 'Demo',
     component: DemoPage,
   },

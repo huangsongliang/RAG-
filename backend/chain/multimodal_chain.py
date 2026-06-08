@@ -151,12 +151,12 @@ class MultimodalRAGChain:
     async def stream_run(
         self,
         query: str,
-        image_paths: Optional[List[str]] = None,
+        image_descriptions: Optional[List[str]] = None,
         top_k: int = 3,
         use_rag: bool = True,
         history: str = "",
     ) -> AsyncGenerator[str, None]:
-        """流式执行多模态 RAG 流程"""
+        """流式执行多模态 RAG 流程（image_descriptions 由调用方预计算避免重复）"""
         documents = []
         text_context = ""
 
@@ -164,11 +164,8 @@ class MultimodalRAGChain:
             documents = await self.rag_chain.async_retrieve(query, top_k=top_k)
             text_context = self.rag_chain.build_context(documents)
 
-        image_descriptions = []
-        if image_paths:
-            image_descriptions = self.describe_images(image_paths)
-
-        multimodal_context = self.build_multimodal_context(text_context, image_descriptions)
+        descs = image_descriptions or []
+        multimodal_context = self.build_multimodal_context(text_context, descs)
 
         if history:
             prompt = default_prompts.format(
@@ -236,6 +233,16 @@ def get_multimodal_rag_chain() -> MultimodalRAGChain:
     """获取多模态 RAG 链实例"""
     global _multimodal_rag_chain
     if _multimodal_rag_chain is None:
-        _multimodal_rag_chain = MultimodalRAGChain()
+        from backend.core.config import settings
+
+        provider = settings.vision_provider
+        model = settings.vision_model
+        api_key = settings.vision_api_key or None
+
+        _multimodal_rag_chain = MultimodalRAGChain(
+            vision_provider=provider,
+            vision_model=model,
+            vision_api_key=api_key,
+        )
         logger.info("多模态 RAG 链已初始化")
     return _multimodal_rag_chain

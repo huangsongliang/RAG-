@@ -14,6 +14,7 @@ class DatabaseWrapper:
     def __init__(self):
         self._session = None
         self._initialized = False
+        self._last_rowcount = 0
 
     def init(self):
         """初始化数据库连接"""
@@ -37,6 +38,7 @@ class DatabaseWrapper:
                 async with self._db_manager.get_session() as session:
                     result = await session.execute(query, params or ())
                     await session.commit()
+                    self._last_rowcount = result.rowcount
                     return result
         except Exception as e:
             logger.error(f"执行查询失败: {str(e)}")
@@ -60,8 +62,8 @@ class DatabaseWrapper:
 
     @property
     def rowcount(self) -> int:
-        """返回受影响的行数"""
-        return 0
+        """返回最后一条写操作受影响的行数"""
+        return self._last_rowcount
 
 
 class MockResult:

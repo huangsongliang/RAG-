@@ -54,7 +54,7 @@ async def query_logs(
     try:
         audit_logger = get_audit_logger()
 
-        logs = audit_logger.query(
+        logs = await audit_logger.query(
             user_id=user_id,
             action=AuditAction(action) if action else None,
             category=AuditCategory(category) if category else None,
@@ -90,7 +90,7 @@ async def get_user_activity(
     """获取用户活动日志"""
     try:
         audit_logger = get_audit_logger()
-        logs = audit_logger.get_user_activity(
+        logs = await audit_logger.get_user_activity(
             user_id=user_id,
             days=days,
             limit=limit,
@@ -117,7 +117,7 @@ async def get_resource_history(
     """获取资源操作历史"""
     try:
         audit_logger = get_audit_logger()
-        logs = audit_logger.get_resource_history(
+        logs = await audit_logger.get_resource_history(
             resource_type=resource_type,
             resource_id=resource_id,
             limit=limit,
@@ -143,7 +143,7 @@ async def get_failed_attempts(
     """获取失败的操作"""
     try:
         audit_logger = get_audit_logger()
-        logs = audit_logger.get_failed_attempts(
+        logs = await audit_logger.get_failed_attempts(
             hours=hours,
             limit=limit,
         )
@@ -167,7 +167,7 @@ async def get_security_events(
     """获取安全事件"""
     try:
         audit_logger = get_audit_logger()
-        logs = audit_logger.get_security_events(
+        logs = await audit_logger.get_security_events(
             days=days,
             limit=limit,
         )
@@ -192,7 +192,7 @@ async def get_statistics(
         audit_logger = get_audit_logger()
         start_time = datetime.now() - timedelta(days=days)
 
-        stats = audit_logger.get_statistics(
+        stats = await audit_logger.get_statistics(
             start_time=start_time,
             end_time=datetime.now(),
         )
@@ -218,7 +218,7 @@ async def export_logs(
     """导出审计日志"""
     try:
         audit_logger = get_audit_logger()
-        logs = audit_logger.export_logs(
+        logs = await audit_logger.export_logs(
             start_time=start_time,
             end_time=end_time,
             format=format,
@@ -245,7 +245,7 @@ async def cleanup_old_logs(
     """清理旧日志"""
     try:
         audit_logger = get_audit_logger()
-        deleted_count = audit_logger.cleanup_old_logs(days=days)
+        deleted_count = await audit_logger.cleanup_old_logs(days=days)
 
         return {
             "status": "success",

@@ -21,7 +21,7 @@ dependencies = [
     "chromadb>=0.5.0",
     "rank-bm25>=0.2.0",
     "sentence-transformers>=2.2.0",
-    "transformers>=4.30.0",
+    "transformers>=4.30.0,<5.0.0",
     "torch>=2.0.0",
     "numpy>=1.26.0",
     "redis>=5.0.0",
@@ -46,6 +46,11 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "opencv-python-headless>=4.8.0",
     "pillow>=10.0.0",
+    "beautifulsoup4>=4.14.3",
+    "python-certifi-win32>=1.6.1",
+    "hanlp>=2.1.0",
+    "hanlp-trie>=0.0.5",
+    "pymupdf>=1.27.2.3",
 ]
 
 [dependency-groups]
@@ -87,4 +92,4 @@ omit = ["backend/__init__.py", "backend/*/__init__.py"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 35  # 原 30，新增 6 个模块测试后保守提升到 35
+fail_under = 40  # v1.2 新增 3 个模块测试（ab_test + graph_storage + config），保守提升到 40

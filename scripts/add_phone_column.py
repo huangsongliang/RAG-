@@ -16,7 +16,7 @@ from sqlalchemy import text
 async def add_phone_column():
     """添加 phone 列"""
     print("开始添加 phone 列...")
-    
+
     async with get_db_session() as session:
         try:
             # 检查 phone 列是否已存在
@@ -27,11 +27,11 @@ async def add_phone_column():
             """)
             result = await session.execute(check_query)
             count = result.scalar_one_or_none()
-            
+
             if count and count > 0:
                 print("phone 列已存在，无需添加")
                 return True
-            
+
             # 添加 phone 列
             add_column_query = text("""
                 ALTER TABLE users
@@ -39,10 +39,10 @@ async def add_phone_column():
             """)
             await session.execute(add_column_query)
             await session.commit()
-            
+
             print("✅ phone 列添加成功！")
             return True
-            
+
         except Exception as e:
             print(f"❌ 添加 phone 列失败: {e}")
             await session.rollback()

@@ -12,7 +12,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from backend.utils.logger import get_logger, set_request_id
@@ -169,54 +169,6 @@ def capture_message(message: str, error_type: str = "CustomError", **kwargs) -> 
     return error_tracker.track_error(error_type=error_type, message=message, include_stack=False, **kwargs)
 
 
-def error_handler_middleware(func: Callable) -> Callable:
-    """
-    装饰器：统一错误处理中间件
-
-    Args:
-        func: 被装饰的函数
-
-    Returns:
-        包装后的函数
-    """
-    import asyncio
-
-    if asyncio.iscoroutinefunction(func):
-
-        async def async_wrapper(*args, **kwargs):
-            request_id = set_request_id()
-
-            try:
-                return await func(*args, **kwargs)
-            except Exception as e:
-                capture_exception(
-                    e,
-                    request_id=request_id,
-                    endpoint=kwargs.get("endpoint", "unknown"),
-                    method=kwargs.get("method", "GET"),
-                )
-                raise
-
-        return async_wrapper
-    else:
-
-        def sync_wrapper(*args, **kwargs):
-            request_id = set_request_id()
-
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                capture_exception(
-                    e,
-                    request_id=request_id,
-                    endpoint=kwargs.get("endpoint", "unknown"),
-                    method=kwargs.get("method", "GET"),
-                )
-                raise
-
-        return sync_wrapper
-
-
 def get_error_info(error_id: str) -> Optional[ErrorInfo]:
     """
     根据错误 ID 获取错误详情（预留接口，可扩展存储）
@@ -245,11 +197,11 @@ def setup_exception_handlers(app):
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        """全局异常处理器"""
+        """全局异常处理器 — 兜底所有未处理异常"""
         request_id = request.headers.get("X-Request-ID", str(uuid4()))
         set_request_id(request_id)
 
-        capture_exception(
+        error_id = capture_exception(
             exc,
             request_id=request_id,
             endpoint=str(request.url.path),
@@ -261,7 +213,7 @@ def setup_exception_handlers(app):
             content={
                 "error": "INTERNAL_ERROR",
                 "message": "服务器内部错误",
-                "error_id": str(uuid4()),
+                "error_id": error_id,
                 "request_id": request_id,
                 "timestamp": datetime.now().isoformat(),
             },
@@ -273,8 +225,9 @@ def setup_exception_handlers(app):
         request_id = request.headers.get("X-Request-ID", str(uuid4()))
         set_request_id(request_id)
 
+        error_id = None
         if exc.status_code >= 500:
-            capture_exception(
+            error_id = capture_exception(
                 exc,
                 request_id=request_id,
                 endpoint=str(request.url.path),
@@ -296,7 +249,105 @@ def setup_exception_handlers(app):
                 "error": error_type,
                 "message": message,
                 "detail": detail,
+                "error_id": error_id,
                 "request_id": request_id,
                 "timestamp": datetime.now().isoformat(),
             },
         )
+
+    # 注册自定义业务异常处理器
+    _setup_app_exception_handlers(app)
+
+
+def _setup_app_exception_handlers(app):
+    """注册 AppException 子类的全局异常处理器"""
+    from fastapi import Request
+    from fastapi.responses import JSONResponse
+
+    from backend.models.exceptions import (
+        AppException,
+        AuthenticationException,
+        AuthorizationException,
+        ConfigurationException,
+        EmptyRetrievalResultException,
+        LLMConnectionException,
+        LLMException,
+        LLMTimeoutException,
+        MemoryException,
+        RateLimitException,
+        RedisConnectionException,
+        RetrievalException,
+        ValidationException,
+        VectorStoreException,
+    )
+
+    # error_code → HTTP status_code 映射
+    ERROR_CODE_STATUS = {
+        "APP_ERROR": 500,
+        "LLM_ERROR": 500,
+        "LLM_TIMEOUT": 504,
+        "LLM_CONNECTION_ERROR": 502,
+        "RETRIEVAL_ERROR": 500,
+        "VECTOR_STORE_ERROR": 500,
+        "EMPTY_RETRIEVAL": 404,
+        "MEMORY_ERROR": 500,
+        "REDIS_CONNECTION_ERROR": 502,
+        "CONFIG_ERROR": 500,
+        "VALIDATION_ERROR": 422,
+        "RATE_LIMIT_EXCEEDED": 429,
+        "AUTH_ERROR": 401,
+        "AUTHORIZATION_ERROR": 403,
+    }
+
+    @app.exception_handler(AppException)
+    async def app_exception_handler(request: Request, exc: AppException):
+        """统一处理所有业务异常"""
+        status_code = ERROR_CODE_STATUS.get(exc.error_code, 500)
+        request_id = request.headers.get("X-Request-ID", str(uuid4()))
+        set_request_id(request_id)
+
+        error_id = capture_exception(
+            exc,
+            request_id=request_id,
+            endpoint=str(request.url.path),
+            method=request.method,
+        )
+
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": exc.error_code,
+                "message": exc.message,
+                "detail": exc.details if exc.details else None,
+                "error_id": error_id,
+                "request_id": request_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+
+    # 为特定异常子类注册更精确的处理器（继承链上精确匹配优先）
+    _register_sub_exception_handlers(
+        app,
+        app_exception_handler,
+        [
+            LLMException,
+            LLMTimeoutException,
+            LLMConnectionException,
+            RetrievalException,
+            VectorStoreException,
+            EmptyRetrievalResultException,
+            MemoryException,
+            RedisConnectionException,
+            ConfigurationException,
+            ValidationException,
+            RateLimitException,
+            AuthenticationException,
+            AuthorizationException,
+        ],
+    )
+
+
+def _register_sub_exception_handlers(app, base_handler, exception_classes):
+    """为异常子类注册独立处理器，确保类型匹配时优先触发"""
+    for exc_cls in exception_classes:
+        app.add_exception_handler(exc_cls, base_handler)

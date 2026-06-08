@@ -383,6 +383,15 @@ const handleUpload = async () => {
       showUploadModal.value = false
       selectedFile.value = null
       uploadDescription.value = ''
+
+      if (result.skipped) {
+        uploadError.value = ''
+        alert(`⚠️ ${result.message || '该文档已存在，已跳过'}`)
+      } else if (result.version) {
+        uploadError.value = ''
+        alert(`✅ ${result.message || '文档已更新至新版本'}`)
+      }
+
       await fetchDocuments()
     } else {
       uploadError.value = result.error || '上传失败'
